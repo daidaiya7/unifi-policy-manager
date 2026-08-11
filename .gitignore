@@ -13,6 +13,8 @@
 # .NET build and publish outputs
 **/bin/
 **/obj/
+**/.build/
+macos/dist/
 /publish*/
 /*.zip
 /TestResults/

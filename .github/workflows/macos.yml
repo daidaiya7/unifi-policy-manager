@@ -1,0 +1,42 @@
+name: macOS
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "macos/**"
+      - "Assets/UniFi-256.png"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths:
+      - "macos/**"
+      - "Assets/UniFi-256.png"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Swift package
+        run: swift build --package-path macos --configuration release
+
+      - name: Build application bundle
+        run: ./macos/build-app.sh
+
+      - name: Verify application signature
+        run: codesign --verify --deep --strict --verbose=2 macos/dist/UniFi-Policy-Manager.app
+
+      - name: Upload macOS application
+        uses: actions/upload-artifact@v4
+        with:
+          name: UniFi-Policy-Manager-macOS
+          path: macos/dist/UniFi-Policy-Manager.app
+          if-no-files-found: error
