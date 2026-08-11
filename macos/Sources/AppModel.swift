@@ -54,6 +54,12 @@ final class AppModel: ObservableObject {
 
     var targetLabel: String { demoMode ? "演示环境" : (api?.target ?? host) }
     var versionLabel: String { demoMode ? "Demo 10.4.57" : (api?.applicationVersion ?? "未知") }
+    var supportsWrites: Bool { demoMode || api?.supportsWrites == true }
+    var capabilityNotice: String { demoMode ? "演示模式：不会修改真实 UCG。" : (api?.capabilityNotice ?? "") }
+    var authenticationLabel: String {
+        if demoMode { return "演示模式" }
+        return supportsWrites ? "API Key · 完整管理" : "本地账号 Cookie · 只读"
+    }
     var totalCount: Int { dnsRecords.count + aclRules.count + firewallRules.count }
     var canConnect: Bool {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -178,6 +184,19 @@ final class AppModel: ObservableObject {
 
     private func refreshAllBody() async {
         guard !demoMode, let api else { status = "演示数据已刷新"; return }
+        if !api.supportsWrites {
+            var unavailable: [String] = []
+            do { dnsRecords = try await api.listDNSRecords().sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending } }
+            catch { dnsRecords = []; unavailable.append("DNS") }
+            do { aclRules = try await api.listPolicies(.acl) }
+            catch { aclRules = []; unavailable.append("ACL") }
+            do { firewallRules = try await api.listPolicies(.firewall) }
+            catch { firewallRules = []; unavailable.append("防火墙") }
+            references = []
+            status = "已读取 DNS \(dnsRecords.count) 条、ACL \(aclRules.count) 条、防火墙 \(firewallRules.count) 条。本地账号 Cookie 只读"
+            if !unavailable.isEmpty { status += "；当前版本 Cookie 接口不可用：\(unavailable.joined(separator: "、"))，可改用 API Key" }
+            return
+        }
         async let dns = api.listDNSRecords()
         async let acl = api.listPolicies(.acl)
         async let firewall = api.listPolicies(.firewall)
@@ -194,6 +213,7 @@ final class AppModel: ObservableObject {
     }
 
     func saveDNS(_ record: DNSRecord) {
+        guard supportsWrites else { showWriteOnlyNotice(); return }
         Task {
             await perform(record.id == nil ? "正在新增 DNS 记录…" : "正在更新 DNS 记录…") {
                 try self.backup(reason: record.id == nil ? "before-create-dns" : "before-update-dns")
@@ -212,6 +232,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteDNS(_ record: DNSRecord) {
+        guard supportsWrites else { showWriteOnlyNotice(); return }
         Task {
             await perform("正在删除 DNS 记录…") {
                 try self.backup(reason: "before-delete-dns")
@@ -226,6 +247,7 @@ final class AppModel: ObservableObject {
     func toggleDNS(_ record: DNSRecord) { var updated = record; updated.enabled.toggle(); saveDNS(updated) }
 
     func savePolicy(kind: PolicyKind, existing: PolicyRule?, json: String) {
+        guard supportsWrites else { showWriteOnlyNotice(); return }
         Task {
             await perform(existing == nil ? "正在新增策略…" : "正在更新策略…") {
                 try self.backup(reason: existing == nil ? "before-create-policy" : "before-update-policy")
@@ -250,6 +272,7 @@ final class AppModel: ObservableObject {
     }
 
     func deletePolicy(_ rule: PolicyRule) {
+        guard supportsWrites else { showWriteOnlyNotice(); return }
         Task {
             await perform("正在删除策略…") {
                 try self.backup(reason: "before-delete-policy")
@@ -263,6 +286,7 @@ final class AppModel: ObservableObject {
     }
 
     func togglePolicy(_ rule: PolicyRule) {
+        guard supportsWrites else { showWriteOnlyNotice(); return }
         guard rule.canModify,
               var object = try? JSONSerialization.jsonObject(with: Data(rule.editableJSON.utf8)) as? [String: Any] else { return }
         object["enabled"] = !rule.enabled
@@ -303,6 +327,11 @@ final class AppModel: ObservableObject {
 
     private func upsert(_ rule: PolicyRule, in array: inout [PolicyRule]) {
         if let index = array.firstIndex(where: { $0.id == rule.id }) { array[index] = rule } else { array.append(rule) }
+    }
+
+    private func showWriteOnlyNotice() {
+        errorMessage = "当前使用本地账号 Cookie 模式，只支持读取。该操作仅 API Key 模式可用。"
+        status = "本地账号 Cookie 只读"
     }
 
     private func perform(_ message: String, operation: @escaping () async throws -> Void) async {

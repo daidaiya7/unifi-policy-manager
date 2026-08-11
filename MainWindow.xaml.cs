@@ -31,7 +31,9 @@ public partial class MainWindow : Window
     private string? _loadedBundlePath;
     private PolicyChangePlan? _changePlan;
     private string? _lastChangePlanBackupPath;
+    private string _lastRefreshNotice = string.Empty;
     private bool _uiReady;
+    public bool SupportsWrites => _client?.SupportsWrites == true;
 
     public MainWindow(bool demoMode = false)
     {
@@ -148,7 +150,7 @@ public partial class MainWindow : Window
             _lastOperation = null;
             ShowWorkspace();
             await RefreshAllAsync();
-            SetStatus($"已读取 DNS {_records.Count} 条、ACL {_aclRules.Count} 条、防火墙 {_firewallRules.Count} 条。");
+            SetStatus(RefreshSummary());
         });
     }
 
@@ -162,8 +164,22 @@ public partial class MainWindow : Window
         TargetText.Text = _demoMode ? "模拟数据（不会连接路由器）" : $"已连接 {_client.Target}";
         SiteInfoText.Text = $"Site: {_client.Site} · UUID: {_client.SiteId} · Network {_client.ApplicationVersion}";
         SidebarSiteText.Text = $"{_client.Site} · {_client.ApplicationVersion}";
+        var supportsWrites = _client.SupportsWrites;
+        CapabilityNoticeText.Text = _client.CapabilityNotice;
+        CapabilityNoticeText.Visibility = supportsWrites ? Visibility.Collapsed : Visibility.Visible;
+        OverviewApiBadgeText.Text = supportsWrites ? "实时读取 · Integration API" : "本地账号 Cookie · 只读";
+        ChangeCenterNavRadio.IsEnabled = supportsWrites;
+        OpenChangeCenterButton.IsEnabled = supportsWrites;
+        DnsBatchExpander.IsEnabled = supportsWrites;
+        AddDnsButton.IsEnabled = supportsWrites;
+        AddAclButton.IsEnabled = supportsWrites;
+        AddFirewallButton.IsEnabled = supportsWrites;
+        SelectAllCheckBox.IsEnabled = supportsWrites;
+        RecordsGrid.Items.Refresh();
         DashboardNavRadio.IsChecked = true;
         NavigateTo("Overview");
+        UpdateBatchSelectionState();
+        UpdateUndoState();
     }
 
     private void ShowLogin()
@@ -282,11 +298,46 @@ public partial class MainWindow : Window
 
     private async Task RefreshAllAsync()
     {
-        await RefreshRecordsAsync();
-        await RefreshPoliciesAsync(OfficialPolicyKind.Acl);
-        await RefreshPoliciesAsync(OfficialPolicyKind.Firewall);
-        _policyReferences = await RequireClient().ListPolicyReferencesAsync();
+        var client = RequireClient();
+        var unavailable = new List<string>();
+        if (client.SupportsWrites)
+        {
+            await RefreshRecordsAsync();
+            await RefreshPoliciesAsync(OfficialPolicyKind.Acl);
+            await RefreshPoliciesAsync(OfficialPolicyKind.Firewall);
+            _policyReferences = await client.ListPolicyReferencesAsync();
+        }
+        else
+        {
+            await RefreshLocalSectionAsync("DNS", RefreshRecordsAsync, _records.Clear, unavailable);
+            await RefreshLocalSectionAsync("ACL", () => RefreshPoliciesAsync(OfficialPolicyKind.Acl), _aclRules.Clear, unavailable);
+            await RefreshLocalSectionAsync("防火墙", () => RefreshPoliciesAsync(OfficialPolicyKind.Firewall), _firewallRules.Clear, unavailable);
+            _policyReferences = [];
+            UpdateStatistics();
+            UpdatePolicyStatistics();
+        }
+        _lastRefreshNotice = unavailable.Count == 0
+            ? string.Empty
+            : $"当前 Network 版本的 Cookie 接口无法读取：{string.Join("、", unavailable)}；这些功能可改用 API Key。";
         if (_loadedBundle is not null) RebuildChangePlan();
+    }
+
+    private static async Task RefreshLocalSectionAsync(string name, Func<Task> refresh, Action clear, ICollection<string> unavailable)
+    {
+        try { await refresh(); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            clear();
+            unavailable.Add(name);
+        }
+    }
+
+    private string RefreshSummary()
+    {
+        var summary = $"已读取 DNS {_records.Count} 条、ACL {_aclRules.Count} 条、防火墙 {_firewallRules.Count} 条。";
+        if (!SupportsWrites) summary += " 本地账号 Cookie 为只读；写入、排序和策略变更中心仅 API Key 可用。";
+        if (_lastRefreshNotice.Length > 0) summary += " " + _lastRefreshNotice;
+        return summary;
     }
 
     private bool FilterRecord(object item)
@@ -335,7 +386,7 @@ public partial class MainWindow : Window
         TxtCount.Text = _records.Count(record => record.RecordType == "TXT").ToString();
         SrvCount.Text = _records.Count(record => record.RecordType == "SRV").ToString();
         var displayed = _view?.Cast<DnsRecord>().Count() ?? _records.Count;
-        RecordSummaryText.Text = $"共 {_records.Count} 条，当前显示 {displayed} 条；仅转发域名可多选批量删除。";
+        RecordSummaryText.Text = $"共 {_records.Count} 条，当前显示 {displayed} 条；{(SupportsWrites ? "仅转发域名可多选批量删除。" : "本地账号 Cookie 只读，增删改仅 API Key。")}";
         DnsTabHeaderText.Text = $"DNS 记录 ({_records.Count})";
         UpdateDashboardStatistics();
     }
@@ -344,8 +395,9 @@ public partial class MainWindow : Window
     {
         var aclDisplayed = _aclView?.Cast<OfficialPolicyRule>().Count() ?? _aclRules.Count;
         var firewallDisplayed = _firewallView?.Cast<OfficialPolicyRule>().Count() ?? _firewallRules.Count;
-        AclSummaryText.Text = $"共 {_aclRules.Count} 条，显示 {aclDisplayed} 条；系统/派生规则只读。";
-        FirewallSummaryText.Text = $"共 {_firewallRules.Count} 条，显示 {firewallDisplayed} 条；系统/派生规则只读。";
+        var capability = SupportsWrites ? "系统/派生规则只读。" : "本地账号 Cookie 只读，写入和排序仅 API Key。";
+        AclSummaryText.Text = $"共 {_aclRules.Count} 条，显示 {aclDisplayed} 条；{capability}";
+        FirewallSummaryText.Text = $"共 {_firewallRules.Count} 条，显示 {firewallDisplayed} 条；{capability}";
         AclTabHeaderText.Text = $"ACL 规则 ({_aclRules.Count})";
         FirewallTabHeaderText.Text = $"防火墙 ({_firewallRules.Count})";
         UpdateDashboardStatistics();
@@ -361,10 +413,11 @@ public partial class MainWindow : Window
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) =>
-        await RunBusyAsync("正在刷新全部策略…", async () => { await RefreshAllAsync(); SetStatus("ACL、DNS 和防火墙策略已刷新。"); });
+        await RunBusyAsync("正在刷新全部策略…", async () => { await RefreshAllAsync(); SetStatus(RefreshSummary()); });
 
     private void AddButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         var editor = new RecordEditorWindow { Owner = this };
         if (editor.ShowDialog() == true && editor.Result is not null) _ = CreateRecordAsync(editor.Result);
     }
@@ -396,6 +449,7 @@ public partial class MainWindow : Window
 
     private void OpenEditor(DnsRecord record)
     {
+        if (!RequireWriteMode()) return;
         var editor = new RecordEditorWindow(record) { Owner = this };
         if (editor.ShowDialog() == true && editor.Result is not null) _ = UpdateRecordAsync(record, editor.Result);
     }
@@ -415,6 +469,7 @@ public partial class MainWindow : Window
 
     private async void ToggleRowButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not DnsRecord record) return;
         var updated = record.Clone();
         updated.Enabled = !record.Enabled;
@@ -423,6 +478,7 @@ public partial class MainWindow : Window
 
     private async void DeleteRowButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not DnsRecord record) return;
         if (MessageBox.Show(this, $"确定删除 {record.TypeLabel}“{record.Key}”吗？\n\n删除前会自动保存完整 DNS 快照。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         await RunBusyAsync("正在删除记录…", async () =>
@@ -436,11 +492,15 @@ public partial class MainWindow : Window
         });
     }
 
-    private async void AddAclButton_Click(object sender, RoutedEventArgs e) =>
-        await OpenPolicyEditorAsync(OfficialPolicyKind.Acl, null);
+    private async void AddAclButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (RequireWriteMode()) await OpenPolicyEditorAsync(OfficialPolicyKind.Acl, null);
+    }
 
-    private async void AddFirewallButton_Click(object sender, RoutedEventArgs e) =>
-        await OpenPolicyEditorAsync(OfficialPolicyKind.Firewall, null);
+    private async void AddFirewallButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (RequireWriteMode()) await OpenPolicyEditorAsync(OfficialPolicyKind.Firewall, null);
+    }
 
     private async void EditPolicy_Click(object sender, RoutedEventArgs e)
     {
@@ -459,7 +519,7 @@ public partial class MainWindow : Window
 
     private async Task OpenPolicyEditorAsync(OfficialPolicyKind kind, OfficialPolicyRule? existing)
     {
-        var readOnly = existing is { CanModify: false };
+        var readOnly = !SupportsWrites || existing is { CanModify: false };
         var editor = new PolicyJsonEditorWindow(kind, _policyReferences, existing, readOnly) { Owner = this };
         if (editor.ShowDialog() != true || editor.ResultJson is null) return;
         await RunBusyAsync(existing is null ? "正在创建策略…" : "正在更新策略…", async () =>
@@ -475,6 +535,7 @@ public partial class MainWindow : Window
 
     private async void TogglePolicy_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not OfficialPolicyRule { CanModify: true } rule) return;
         await RunBusyAsync("正在切换策略状态…", async () =>
         {
@@ -489,6 +550,7 @@ public partial class MainWindow : Window
 
     private async void DeletePolicy_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not OfficialPolicyRule { CanModify: true } rule) return;
         if (MessageBox.Show(this, $"确定删除策略“{rule.Name}”吗？\n\n删除前会保存 ACL、DNS 和防火墙完整快照。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         await RunBusyAsync("正在删除策略…", async () =>
@@ -507,6 +569,7 @@ public partial class MainWindow : Window
 
     private async Task MovePolicyAsync(object sender, int direction)
     {
+        if (!RequireWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not OfficialPolicyRule { CanModify: true } rule) return;
         await RunBusyAsync("正在调整策略顺序…", async () =>
         {
@@ -647,6 +710,7 @@ public partial class MainWindow : Window
 
     private async void ApplyOrderingButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if (_changePlan is null || !ApplyOrderingButton.IsEnabled) return;
         var plan = _changePlan;
         if (MessageBox.Show(this, "确定按导入基线恢复 ACL 和防火墙用户策略顺序吗？\n\n执行前会保存完整快照。", "恢复策略排序", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
@@ -667,6 +731,7 @@ public partial class MainWindow : Window
 
     private async void ExecutePlanButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if (_changePlan is null) return;
         var plan = _changePlan;
         var selected = plan.Items.Where(item => item.IsSelected && item.IsActionable).ToList();
@@ -816,6 +881,7 @@ public partial class MainWindow : Window
 
     private async void PreviewBatchAddButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         try
         {
             var input = ImportService.ParseText(BatchRulesTextBox.Text, BatchDnsServerTextBox.Text.Trim());
@@ -892,9 +958,9 @@ public partial class MainWindow : Window
         if (!_uiReady || BatchDeleteButton is null || BatchDeletePanelButton is null || BatchDeleteSelectionText is null || SelectAllCheckBox is null) return;
         var selected = _records.Count(record => record.IsForwardDomain && record.IsSelectedForBatch);
         BatchDeleteButton.Content = $"批量删除转发域名 ({selected})";
-        BatchDeleteButton.IsEnabled = selected > 0;
+        BatchDeleteButton.IsEnabled = SupportsWrites && selected > 0;
         BatchDeletePanelButton.Content = $"批量删除转发域名 ({selected})";
-        BatchDeletePanelButton.IsEnabled = selected > 0;
+        BatchDeletePanelButton.IsEnabled = SupportsWrites && selected > 0;
         var visible = _view?.Cast<DnsRecord>().Where(record => record.IsForwardDomain).ToList() ?? [];
         BatchDeleteSelectionText.Text = $"当前列表显示 {visible.Count} 条转发域名，已选择 {selected} 条。批量删除会先预览并保存完整 DNS 快照。";
         SelectAllCheckBox.IsChecked = visible.Count > 0 && visible.All(record => record.IsSelectedForBatch);
@@ -902,6 +968,7 @@ public partial class MainWindow : Window
 
     private async void BatchDeleteButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         var selected = _records.Where(record => record.IsForwardDomain && record.IsSelectedForBatch).Select(record => record.Clone()).ToList();
         if (selected.Count == 0) return;
         var preview = new BatchPreviewWindow(selected) { Owner = this };
@@ -931,6 +998,7 @@ public partial class MainWindow : Window
 
     private async void UndoButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!RequireWriteMode()) return;
         if (_lastOperation is null) return;
         if (MessageBox.Show(this, "确定撤销上一次由本程序完成的操作吗？\n\n撤销前也会保存完整快照。", "确认撤销", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         await RunBusyAsync("正在撤销…", async () =>
@@ -1010,7 +1078,14 @@ public partial class MainWindow : Window
 
     private IUniFiClient RequireClient() => _client ?? throw new UniFiApiException("请先连接 UCG。");
 
-    private void UpdateUndoState() => UndoButton.IsEnabled = _lastOperation is not null;
+    private void UpdateUndoState() => UndoButton.IsEnabled = SupportsWrites && _lastOperation is not null;
+
+    private bool RequireWriteMode()
+    {
+        if (SupportsWrites) return true;
+        ShowError(new UniFiApiException("当前使用本地账号 Cookie 模式，只支持读取。该操作仅 API Key 模式可用。"));
+        return false;
+    }
 
     private async Task RunBusyAsync(string message, Func<Task> action)
     {
@@ -1030,8 +1105,9 @@ public partial class MainWindow : Window
     {
         var message = exception switch
         {
-            UniFiApiException api when api.Message.StartsWith("本地账号已登录", StringComparison.Ordinal) => api.Message,
+            UniFiApiException api when api.Message.Contains("仅 API Key", StringComparison.Ordinal) => api.Message,
             UniFiApiException api when api.StatusCode is 401 or 403 => "认证凭据无效或没有当前 Console 的访问权限。API Key 请在 unifi.ui.com 检查；账号登录请使用 Console 本地管理员账号。",
+            UniFiApiException api when api.StatusCode == 404 && _client?.AuthenticationMode == AuthenticationMode.LocalAccount => "当前 Network 版本未提供该 Cookie 读取接口；此功能可改用 API Key。",
             UniFiApiException api when api.StatusCode == 404 => "此 Console 未提供请求的官方 Integration API，或所选站点/记录不存在。",
             _ => exception.Message
         };

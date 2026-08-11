@@ -12,8 +12,10 @@
     <string>UniFi-256.png</string>
     <key>CFBundleIdentifier</key>
     <string>com.autunn.UniFiPolicyManagerMac</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleGetInfoString</key>
+	<string>Dual authentication: API Key full management; local-account Cookie read-only access.</string>
     <key>CFBundleName</key>
     <string>UniFi Policy Manager</string>
     <key>CFBundlePackageType</key>

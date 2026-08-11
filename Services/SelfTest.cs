@@ -68,6 +68,31 @@ public static class SelfTest
             return Task.CompletedTask;
         });
 
+        await CheckAsync("local_cookie_response_mapping", () =>
+        {
+            using var dnsDocument = JsonDocument.Parse("""
+                {"_id":"dns-local-1","record_type":"A_RECORD","key":"nas.home.arpa","value":"192.0.2.10","enabled":true,"ttl":300}
+                """);
+            var dns = LocalSessionPolicyMapper.ParseDns(dnsDocument.RootElement);
+            if (dns.Id != "dns-local-1" || dns.RecordType != "A" || dns.Key != "nas.home.arpa" || dns.Value != "192.0.2.10" || dns.Ttl != 300)
+                throw new Exception("Local Cookie DNS response mapping failed.");
+
+            using var aclDocument = JsonDocument.Parse("""
+                {"_id":"acl-local-1","index":7,"name":"Guest isolation","enabled":true,"type":"IPV4","action":"BLOCK","description":"local ACL","predefined":false}
+                """);
+            var acl = LocalSessionPolicyMapper.ParsePolicy(OfficialPolicyKind.Acl, aclDocument.RootElement, 0);
+            if (acl.Id != "acl-local-1" || acl.Index != 7 || acl.Type != "IPV4" || acl.Action != "BLOCK" || !acl.CanModify)
+                throw new Exception("Local Cookie ACL response mapping failed.");
+
+            using var firewallDocument = JsonDocument.Parse("""
+                {"id":"firewall-local-1","name":"System rule","enabled":true,"ip_version":"IPV4_AND_IPV6","action":{"type":"ALLOW"},"predefined":true}
+                """);
+            var firewall = LocalSessionPolicyMapper.ParsePolicy(OfficialPolicyKind.Firewall, firewallDocument.RootElement, 3);
+            if (firewall.Id != "firewall-local-1" || firewall.Index != 3 || firewall.Type != "IPV4_AND_IPV6" || firewall.Action != "ALLOW" || firewall.CanModify)
+                throw new Exception("Local Cookie firewall response mapping failed.");
+            return Task.CompletedTask;
+        });
+
         await CheckAsync("secure_connection_settings_roundtrip", () =>
         {
             var directory = Path.Combine(Path.GetTempPath(), $"unifi-policy-manager-settings-{Guid.NewGuid():N}");
@@ -120,6 +145,10 @@ public static class SelfTest
             if (main.FindName("AuthenticationModeComboBox") is null) throw new Exception("Authentication mode selector was not loaded.");
             if (main.FindName("RememberCredentialCheckBox") is null) throw new Exception("Remember credential checkbox was not loaded.");
             if (main.FindName("ForgetCredentialButton") is null) throw new Exception("Forget credential button was not loaded.");
+            if (main.FindName("CapabilityNoticeText") is null) throw new Exception("Authentication capability notice was not loaded.");
+            if (main.FindName("OpenChangeCenterButton") is null) throw new Exception("API-Key-only change center button was not loaded.");
+            if (main.FindName("AddDnsButton") is null || main.FindName("AddAclButton") is null || main.FindName("AddFirewallButton") is null)
+                throw new Exception("API-Key-only write buttons were not loaded.");
             main.Close();
             foreach (var record in AllRecordTypes())
             {

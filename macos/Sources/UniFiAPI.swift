@@ -35,6 +35,8 @@ final class TLSDelegate: NSObject, URLSessionDelegate {
 final class UniFiAPI: @unchecked Sendable {
     let target: String
     let authenticationMode: AuthenticationMode
+    var supportsWrites: Bool { authenticationMode == .apiKey }
+    var capabilityNotice: String { supportsWrites ? "API Key 模式：支持读取和写入。" : "本地账号 Cookie 模式：支持读取；写入仅 API Key 可用。" }
     private let apiKey: String?
     private var localCredentials: (username: String, password: String)?
     private var csrfToken: String?
@@ -78,58 +80,85 @@ final class UniFiAPI: @unchecked Sendable {
     }
 
     func connect() async throws {
-        if authenticationMode == .localAccount { try await authenticateLocalAccount() }
-        let info = try await request(path: "/proxy/network/integration/v1/info")
-        applicationVersion = info["applicationVersion"] as? String ?? "未知"
-        sites = try await paged(path: "/proxy/network/integration/v1/sites").map { object in
-            UniFiSite(
-                id: object["id"] as? String ?? "",
-                internalReference: object["internalReference"] as? String ?? "",
-                name: object["name"] as? String ?? ""
-            )
-        }.filter { !$0.id.isEmpty }
+        if authenticationMode == .localAccount {
+            try await authenticateLocalAccount()
+            if let status = try? await request(path: "/proxy/network/status") {
+                let meta = status["meta"] as? [String: Any]
+                applicationVersion = meta?["server_version"] as? String ?? meta?["version"] as? String ?? "未知"
+            }
+            sites = try await requestArray(path: "/proxy/network/api/self/sites").compactMap { object in
+                guard let reference = object["name"] as? String, !reference.isEmpty else { return nil }
+                let id = object["id"] as? String ?? object["_id"] as? String ?? reference
+                let name = object["desc"] as? String ?? object["description"] as? String ?? reference
+                return UniFiSite(id: id, internalReference: reference, name: name)
+            }
+        } else {
+            let info = try await request(path: "/proxy/network/integration/v1/info")
+            applicationVersion = info["applicationVersion"] as? String ?? "未知"
+            sites = try await paged(path: "/proxy/network/integration/v1/sites").map { object in
+                UniFiSite(
+                    id: object["id"] as? String ?? "",
+                    internalReference: object["internalReference"] as? String ?? "",
+                    name: object["name"] as? String ?? ""
+                )
+            }.filter { !$0.id.isEmpty }
+        }
         if sites.isEmpty { throw UniFiError.invalidResponse("认证成功，但没有返回可管理站点。") }
     }
 
     func selectSite(_ site: UniFiSite) { selectedSite = site }
 
     func listDNSRecords() async throws -> [DNSRecord] {
-        try await paged(path: sitePath("dns/policies")).map(parseDNS)
+        if authenticationMode == .localAccount {
+            return try await requestArray(path: localSitePath("static-dns")).map(parseLocalDNS)
+        }
+        return try await paged(path: sitePath("dns/policies")).map(parseDNS)
     }
 
     func createDNS(_ record: DNSRecord) async throws {
+        try requireWrites()
         _ = try await request(path: sitePath("dns/policies"), method: "POST", body: try dnsPayload(record))
     }
 
     func updateDNS(_ record: DNSRecord) async throws {
+        try requireWrites()
         guard let id = record.id else { throw UniFiError.api("DNS 记录缺少 ID。") }
         _ = try await request(path: sitePath("dns/policies/\(id)"), method: "PUT", body: try dnsPayload(record))
     }
 
     func deleteDNS(_ record: DNSRecord) async throws {
+        try requireWrites()
         guard let id = record.id else { throw UniFiError.api("DNS 记录缺少 ID。") }
         _ = try await request(path: sitePath("dns/policies/\(id)"), method: "DELETE")
     }
 
     func listPolicies(_ kind: PolicyKind) async throws -> [PolicyRule] {
-        try await paged(path: sitePath(kind.apiPath)).map { parsePolicy($0, kind: kind) }.sorted { $0.index < $1.index }
+        if authenticationMode == .localAccount {
+            let suffix = kind == .acl ? "acl-rules" : "firewall-policies"
+            return try await requestArray(path: localSitePath(suffix)).enumerated().map { parseLocalPolicy($0.element, kind: kind, fallbackIndex: $0.offset) }.sorted { $0.index < $1.index }
+        }
+        return try await paged(path: sitePath(kind.apiPath)).map { parsePolicy($0, kind: kind) }.sorted { $0.index < $1.index }
     }
 
     func createPolicy(_ kind: PolicyKind, json: String) async throws {
+        try requireWrites()
         let body = try policyPayload(json)
         _ = try await request(path: sitePath(kind.apiPath), method: "POST", body: body)
     }
 
     func updatePolicy(_ rule: PolicyRule, json: String) async throws {
+        try requireWrites()
         let body = try policyPayload(json)
         _ = try await request(path: sitePath("\(rule.kind.apiPath)/\(rule.id)"), method: "PUT", body: body)
     }
 
     func deletePolicy(_ rule: PolicyRule) async throws {
+        try requireWrites()
         _ = try await request(path: sitePath("\(rule.kind.apiPath)/\(rule.id)"), method: "DELETE")
     }
 
     func listReferences() async -> [PolicyReference] {
+        if authenticationMode == .localAccount { return [] }
         let endpoints = [
             ("networks", "网络"), ("firewall/zones", "防火墙区域"), ("devices", "设备"),
             ("traffic-matching-lists", "流量匹配列表"), ("vpn/servers", "VPN 服务器"),
@@ -151,6 +180,15 @@ final class UniFiAPI: @unchecked Sendable {
         return "/proxy/network/integration/v1/sites/\(id)/\(suffix)"
     }
 
+    private func localSitePath(_ suffix: String) -> String {
+        let reference = selectedSite?.internalReference.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
+        return "/proxy/network/v2/api/site/\(reference)/\(suffix)"
+    }
+
+    private func requireWrites() throws {
+        if !supportsWrites { throw UniFiError.api("当前使用本地账号 Cookie 模式，只支持读取。此写入操作仅 API Key 模式可用。") }
+    }
+
     private func paged(path: String) async throws -> [[String: Any]] {
         var output: [[String: Any]] = []
         var offset = 0
@@ -168,6 +206,18 @@ final class UniFiAPI: @unchecked Sendable {
     }
 
     private func request(path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> [String: Any] {
+        let object = try await requestObject(path: path, method: method, body: body)
+        return object as? [String: Any] ?? [:]
+    }
+
+    private func requestArray(path: String) async throws -> [[String: Any]] {
+        let object = try await requestObject(path: path, method: "GET", body: nil)
+        if let array = object as? [[String: Any]] { return array }
+        if let dictionary = object as? [String: Any], let data = dictionary["data"] as? [[String: Any]] { return data }
+        throw UniFiError.invalidResponse("UniFi 列表响应格式不正确。")
+    }
+
+    private func requestObject(path: String, method: String, body: [String: Any]?) async throws -> Any {
         guard let url = URL(string: target + path) else { throw UniFiError.invalidHost }
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -182,17 +232,12 @@ final class UniFiAPI: @unchecked Sendable {
         guard let http = response as? HTTPURLResponse else { throw UniFiError.invalidResponse("UCG 没有返回 HTTP 响应。") }
         captureCSRF(from: http)
         if !(200..<300).contains(http.statusCode) {
-            if authenticationMode == .localAccount, [401, 403].contains(http.statusCode) {
-                throw UniFiError.api("本地账号已登录，但此 Console 的 Integration API 不接受 Cookie 会话。请改用 API Key。程序不会回退到未公开的 Network 内部接口。")
-            }
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let message = object?["message"] as? String ?? "UniFi 请求失败（HTTP \(http.statusCode)）。"
             throw UniFiError.api(message)
         }
-        if data.isEmpty { return [:] }
-        let object = try JSONSerialization.jsonObject(with: data)
-        if let dictionary = object as? [String: Any] { return dictionary }
-        return [:]
+        if data.isEmpty { return [String: Any]() }
+        return try JSONSerialization.jsonObject(with: data)
     }
 
     private func authenticateLocalAccount() async throws {
@@ -250,6 +295,30 @@ final class UniFiAPI: @unchecked Sendable {
         return record
     }
 
+    private func parseLocalDNS(_ item: [String: Any]) -> DNSRecord {
+        let rawType = (item["record_type"] as? String ?? item["type"] as? String ?? "").uppercased()
+        let type = [
+            "FORWARD_DOMAIN": "NS", "A_RECORD": "A", "AAAA_RECORD": "AAAA",
+            "CNAME_RECORD": "CNAME", "MX_RECORD": "MX", "TXT_RECORD": "TXT", "SRV_RECORD": "SRV"
+        ][rawType] ?? rawType
+        var record = DNSRecord(
+            id: item["id"] as? String ?? item["_id"] as? String,
+            recordType: type,
+            key: item["key"] as? String ?? item["domain"] as? String ?? "",
+            value: item["value"] as? String ?? "",
+            enabled: item["enabled"] as? Bool ?? true,
+            ttl: item["ttl"] as? Int ?? item["ttlSeconds"] as? Int,
+            priority: item["priority"] as? Int,
+            weight: item["weight"] as? Int,
+            port: item["port"] as? Int,
+            service: item["service"] as? String ?? "",
+            protocolName: item["protocol"] as? String ?? "",
+            domain: item["domain"] as? String ?? ""
+        )
+        if type == "SRV", record.key.isEmpty { record.key = "\(record.service).\(record.protocolName).\(record.domain)" }
+        return record
+    }
+
     private func dnsPayload(_ record: DNSRecord) throws -> [String: Any] {
         guard !record.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw UniFiError.api("域名不能为空。") }
         let apiType = [
@@ -286,6 +355,29 @@ final class UniFiAPI: @unchecked Sendable {
             action: kind == .acl ? (item["action"] as? String ?? "") : (actionObject?["type"] as? String ?? ""),
             origin: metadata?["origin"] as? String ?? "", description: item["description"] as? String ?? "", rawJSON: raw
         )
+    }
+
+    private func parseLocalPolicy(_ item: [String: Any], kind: PolicyKind, fallbackIndex: Int) -> PolicyRule {
+        let actionObject = item["action"] as? [String: Any]
+        let scope = item["ipProtocolScope"] as? [String: Any]
+        let metadata = item["metadata"] as? [String: Any]
+        let predefined = item["predefined"] as? Bool ?? false
+        let origin = metadata?["origin"] as? String ?? (predefined ? "SYSTEM_DEFINED" : "USER_DEFINED")
+        var canonical: [String: Any] = [
+            "id": item["id"] as? String ?? item["_id"] as? String ?? UUID().uuidString,
+            "index": item["index"] as? Int ?? fallbackIndex,
+            "name": item["name"] as? String ?? "未命名",
+            "description": item["description"] as? String ?? "",
+            "enabled": item["enabled"] as? Bool ?? true,
+            "metadata": ["origin": origin]
+        ]
+        let type = kind == .acl
+            ? item["type"] as? String ?? item["ip_version"] as? String ?? ""
+            : scope?["ipVersion"] as? String ?? item["ip_version"] as? String ?? ""
+        let action = item["action"] as? String ?? actionObject?["type"] as? String ?? ""
+        if kind == .acl { canonical["type"] = type; canonical["action"] = action }
+        else { canonical["ipProtocolScope"] = ["ipVersion": type]; canonical["action"] = ["type": action] }
+        return parsePolicy(canonical, kind: kind)
     }
 
     private func policyPayload(_ json: String) throws -> [String: Any] {

@@ -15,6 +15,8 @@ public interface IUniFiClient : IDisposable
     string SiteId { get; }
     string ApplicationVersion { get; }
     AuthenticationMode AuthenticationMode { get; }
+    bool SupportsWrites { get; }
+    string CapabilityNotice { get; }
     IReadOnlyList<UniFiSite> Sites { get; }
     void SelectSite(UniFiSite site);
     Task<IReadOnlyList<UniFiSite>> ListSitesAsync(CancellationToken cancellationToken = default);

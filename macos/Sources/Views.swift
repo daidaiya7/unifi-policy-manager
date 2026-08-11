@@ -58,14 +58,15 @@ struct LoginView: View {
                     Text("UniFi 策略管理")
                         .font(.system(size: 35, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("使用 API Key 或 UniFi OS 本地账号连接，通过 Integration API 管理 DNS、ACL 与防火墙策略。")
+                    Text("使用 API Key 完整管理策略，或使用 UniFi OS 本地账号 Cookie 只读查看 DNS、ACL 与防火墙。")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.white.opacity(0.68))
                         .lineSpacing(6)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 18)
                     VStack(alignment: .leading, spacing: 15) {
-                        LoginFeature(icon: "checkmark.shield", text: "官方 API，不使用 SSH 或内部端点")
+                        LoginFeature(icon: "checkmark.shield", text: "API Key 使用官方 Integration API 完整管理")
+                        LoginFeature(icon: "eye", text: "本地账号 Cookie 使用 Network 会话接口只读查看")
                         LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前自动保存恢复基线")
                         LoginFeature(icon: "key", text: "认证凭据存储在 macOS 钥匙串")
                     }
@@ -106,6 +107,9 @@ struct LoginView: View {
                                 Text("仅支持 Console 本地管理员账号，不支持需要 2FA 或 Passkey 的云端 SSO。")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                Text("本地账号模式为只读；写入、启停、删除和排序仅 API Key 可用。部分读取接口取决于 Network 版本。")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
                         } header: { Text("连接信息") }
 
@@ -116,7 +120,7 @@ struct LoginView: View {
                     }
                     .formStyle(.grouped)
                     .scrollDisabled(true)
-                    .frame(height: model.authenticationMode == .apiKey ? 300 : 365)
+                    .frame(height: model.authenticationMode == .apiKey ? 300 : 410)
                     .padding(.horizontal, -20)
                     .padding(.top, 14)
 
@@ -255,7 +259,7 @@ private struct ConnectionBadge: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) { Circle().fill(model.demoMode ? Color.orange : Color.green).frame(width: 8, height: 8); Text(model.demoMode ? "演示模式" : "官方 API").font(.caption.bold()).foregroundStyle(.white) }
+            HStack(spacing: 7) { Circle().fill(model.demoMode ? Color.orange : Color.green).frame(width: 8, height: 8); Text(model.authenticationLabel).font(.caption.bold()).foregroundStyle(.white) }
             Text(model.selectedSite?.displayName ?? "未选择站点").font(.caption2).foregroundStyle(Color.white.opacity(0.52)).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -303,13 +307,21 @@ struct OverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 PageHeader(title: "策略概览", subtitle: "查看当前站点的策略状态与安全操作入口。")
+                if !model.supportsWrites {
+                    Label(model.capabilityNotice + " 某项 Cookie 接口不可用时，该功能可改用 API Key。", systemImage: "eye.fill")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                }
                 HStack {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(model.demoMode ? "演示数据" : "已连接 \(model.targetLabel)").font(.title2.bold()).foregroundStyle(.white)
                         Text("Site: \(model.selectedSite?.displayName ?? "未知") · Network \(model.versionLabel)").font(.caption).foregroundStyle(Color.white.opacity(0.68))
                     }
                     Spacer()
-                    Label("实时读取 · 官方 API", systemImage: "dot.radiowaves.left.and.right").font(.caption.bold()).foregroundStyle(Color(red: 0.68, green: 0.9, blue: 1))
+                    Label(model.authenticationLabel, systemImage: "dot.radiowaves.left.and.right").font(.caption.bold()).foregroundStyle(Color(red: 0.68, green: 0.9, blue: 1))
                 }
                 .padding(22)
                 .background(Color(red: 0.04, green: 0.16, blue: 0.36), in: RoundedRectangle(cornerRadius: 7))
@@ -324,7 +336,7 @@ struct OverviewView: View {
                 HStack(alignment: .top, spacing: 14) {
                     GroupBox("快速操作") {
                         VStack(spacing: 0) {
-                            ActionRow(icon: "network", title: "管理 DNS 记录", subtitle: "新增、编辑、启停或删除官方 DNS Policy") { model.selectedPage = .dns }
+                            ActionRow(icon: "network", title: model.supportsWrites ? "管理 DNS 记录" : "查看 DNS 记录", subtitle: model.supportsWrites ? "新增、编辑、启停或删除官方 DNS Policy" : "本地账号 Cookie 只读；写入仅 API Key") { model.selectedPage = .dns }
                             Divider()
                             ActionRow(icon: "square.and.arrow.up", title: "导出当前基线", subtitle: "保存 DNS、ACL 和防火墙完整快照") { model.exportBaseline() }
                             Divider()
@@ -400,7 +412,7 @@ struct DNSView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .bottom, spacing: 12) {
-                PageHeader(title: "DNS 记录", subtitle: "管理转发域名、A、AAAA、CNAME、MX、TXT 与 SRV。")
+                PageHeader(title: "DNS 记录", subtitle: model.supportsWrites ? "管理转发域名、A、AAAA、CNAME、MX、TXT 与 SRV。" : "本地账号 Cookie 只读；新增、编辑、启停和删除仅 API Key。")
                 Spacer()
                 Picker("类型", selection: $model.dnsTypeFilter) {
                     ForEach(["全部", "NS", "A", "AAAA", "CNAME", "MX", "TXT", "SRV"], id: \.self) { Text($0 == "NS" ? "转发域名" : $0) }
@@ -410,6 +422,7 @@ struct DNSView: View {
                 SearchField(text: $model.search)
                 Button { editingRecord = nil; showingEditor = true } label: { Label("新增记录", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
+                    .disabled(!model.supportsWrites)
             }
             .padding(20)
 
@@ -422,9 +435,9 @@ struct DNSView: View {
                 TableColumn("附加参数") { record in Text(record.extraLabel).foregroundStyle(.secondary).lineLimit(1) }.width(min: 100, ideal: 150)
                 TableColumn("操作") { record in
                     HStack(spacing: 4) {
-                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: record.enabled ? "停用" : "启用") { model.toggleDNS(record) }
-                        IconAction(symbol: "pencil", help: "编辑") { editingRecord = record; showingEditor = true }
-                        IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRecord = record }
+                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (record.enabled ? "停用" : "启用")) { model.toggleDNS(record) }.disabled(!model.supportsWrites)
+                        IconAction(symbol: "pencil", help: "仅 API Key：编辑") { editingRecord = record; showingEditor = true }.disabled(!model.supportsWrites)
+                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRecord = record }.disabled(!model.supportsWrites)
                     }
                 }.width(105)
             }
@@ -564,10 +577,11 @@ struct PolicyListView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .bottom) {
-                PageHeader(title: kind == .acl ? "ACL 规则" : "防火墙策略", subtitle: kind == .acl ? "管理官方 API 支持的 IPv4 与 MAC 访问控制规则。" : "管理用户定义防火墙策略；系统与派生策略保持只读。")
+                PageHeader(title: kind == .acl ? "ACL 规则" : "防火墙策略", subtitle: model.supportsWrites ? (kind == .acl ? "管理官方 API 支持的 IPv4 与 MAC 访问控制规则。" : "管理用户定义防火墙策略；系统与派生策略保持只读。") : "本地账号 Cookie 只读；策略写入和排序仅 API Key。")
                 Spacer()
                 SearchField(text: $model.search)
                 Button { editingRule = nil; showingEditor = true } label: { Label("新增策略", systemImage: "plus") }.buttonStyle(.borderedProminent)
+                    .disabled(!model.supportsWrites)
             }.padding(20)
             Divider()
             Table(model.filteredPolicies(kind)) {
@@ -578,9 +592,9 @@ struct PolicyListView: View {
                 TableColumn("来源") { rule in Text(rule.originLabel).foregroundStyle(rule.canModify ? .primary : .secondary) }.width(100)
                 TableColumn("操作") { rule in
                     HStack(spacing: 4) {
-                        IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: rule.enabled ? "停用" : "启用") { model.togglePolicy(rule) }.disabled(!rule.canModify)
-                        IconAction(symbol: rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }
-                        IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRule = rule }.disabled(!rule.canModify)
+                        IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (rule.enabled ? "停用" : "启用")) { model.togglePolicy(rule) }.disabled(!model.supportsWrites || !rule.canModify)
+                        IconAction(symbol: model.supportsWrites && rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: model.supportsWrites && rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }
+                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRule = rule }.disabled(!model.supportsWrites || !rule.canModify)
                     }
                 }.width(105)
             }
@@ -614,8 +628,8 @@ struct PolicyJSONEditor: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(rule == nil ? "新增 \(kind.title) 策略" : (rule!.canModify ? "编辑 \(rule!.name)" : "查看 \(rule!.name)")).font(.title2.bold())
-                        Text("使用官方 API 请求体 JSON").foregroundStyle(.secondary)
+                        Text(rule == nil ? "新增 \(kind.title) 策略" : (model.supportsWrites && rule!.canModify ? "编辑 \(rule!.name)" : "查看 \(rule!.name)")).font(.title2.bold())
+                        Text(model.supportsWrites ? "使用官方 Integration API 请求体 JSON" : "本地账号 Cookie 只读；写入仅 API Key").foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("格式化", systemImage: "text.alignleft") { formatJSON() }
@@ -625,12 +639,12 @@ struct PolicyJSONEditor: View {
                     .padding(8)
                     .background(Color(nsColor: .textBackgroundColor))
                     .overlay { RoundedRectangle(cornerRadius: 6).stroke(Theme.line) }
-                    .disabled(rule?.canModify == false)
+                    .disabled(!model.supportsWrites || rule?.canModify == false)
                 HStack {
                     if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
                     Spacer()
                     Button("关闭") { dismiss() }
-                    if rule?.canModify != false { Button("验证并保存") { save() }.buttonStyle(.borderedProminent) }
+                    if model.supportsWrites && rule?.canModify != false { Button("验证并保存") { save() }.buttonStyle(.borderedProminent) }
                 }
             }
             .padding(22)

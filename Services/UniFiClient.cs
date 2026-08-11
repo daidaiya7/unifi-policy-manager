@@ -21,6 +21,10 @@ public sealed class UniFiClient : IUniFiClient
     public string SiteId => _selectedSite?.Id ?? string.Empty;
     public string ApplicationVersion { get; private set; } = "未知";
     public AuthenticationMode AuthenticationMode { get; }
+    public bool SupportsWrites => AuthenticationMode == AuthenticationMode.ApiKey;
+    public string CapabilityNotice => SupportsWrites
+        ? "API Key 模式：支持读取、写入、排序和策略变更中心。"
+        : "本地账号 Cookie 模式：支持读取；写入、排序和策略变更中心仅 API Key 可用。";
     public IReadOnlyList<UniFiSite> Sites { get; private set; } = [];
 
     private string ApiRoot => "/proxy/network/integration/v1";
@@ -81,7 +85,31 @@ public sealed class UniFiClient : IUniFiClient
         try
         {
             await client.AuthenticateLocalAccountAsync(username.Trim(), password, cancellationToken);
-            return await ConnectAndInitializeAsync(client, cancellationToken);
+            return await ConnectLocalSessionAsync(client, cancellationToken);
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<UniFiClient> ConnectLocalSessionAsync(UniFiClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            try
+            {
+                using var status = await client.SendAsync(HttpMethod.Get, "/proxy/network/status", null, cancellationToken);
+                var root = status.RootElement;
+                if (root.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.Object)
+                    client.ApplicationVersion = GetOptionalString(meta, "server_version") ?? GetOptionalString(meta, "version") ?? client.ApplicationVersion;
+            }
+            catch (UniFiApiException exception) when (exception.StatusCode is 403 or 404) { }
+            client.Sites = await client.ListLocalSitesAsync(cancellationToken);
+            if (client.Sites.Count == 0)
+                throw new UniFiApiException("本地账号已登录，但没有返回可访问的 Network 站点。");
+            return client;
         }
         catch
         {
@@ -150,7 +178,8 @@ public sealed class UniFiClient : IUniFiClient
 
     public void SelectSite(UniFiSite site)
     {
-        if (!Guid.TryParse(site.Id, out _)) throw new UniFiApiException("站点 ID 不是有效的 UUID。");
+        if (AuthenticationMode == AuthenticationMode.ApiKey && !Guid.TryParse(site.Id, out _))
+            throw new UniFiApiException("站点 ID 不是有效的 UUID。");
         if (!Sites.Any(item => string.Equals(item.Id, site.Id, StringComparison.OrdinalIgnoreCase)))
             throw new UniFiApiException("所选站点不属于当前 Network 应用。");
         _selectedSite = site;
@@ -158,6 +187,7 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<IReadOnlyList<UniFiSite>> ListSitesAsync(CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount) return await ListLocalSitesAsync(cancellationToken);
         var result = new List<UniFiSite>();
         var offset = 0;
         while (true)
@@ -189,6 +219,11 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<IReadOnlyList<DnsRecord>> ListRecordsAsync(CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount)
+        {
+            using var local = await SendAsync(HttpMethod.Get, $"/proxy/network/v2/api/site/{Uri.EscapeDataString(RequireSiteReference())}/static-dns", null, cancellationToken);
+            return ReadLocalArray(local.RootElement).Select(LocalSessionPolicyMapper.ParseDns).Where(item => !string.IsNullOrWhiteSpace(item.RecordType)).ToList();
+        }
         var result = new List<DnsRecord>();
         var offset = 0;
         while (true)
@@ -214,12 +249,14 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<DnsRecord?> CreateRecordAsync(DnsRecord record, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         using var document = await SendAsync(HttpMethod.Post, DnsPoliciesPath, OfficialDnsPolicyMapper.BuildPayload(record), cancellationToken);
         return document.RootElement.ValueKind == JsonValueKind.Object ? OfficialDnsPolicyMapper.Parse(document.RootElement) : null;
     }
 
     public async Task<DnsRecord?> UpdateRecordAsync(string id, DnsRecord record, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("DNS Policy ID 不是有效的 UUID。");
         using var document = await SendAsync(HttpMethod.Put, $"{DnsPoliciesPath}/{Uri.EscapeDataString(id)}", OfficialDnsPolicyMapper.BuildPayload(record), cancellationToken);
         return document.RootElement.ValueKind == JsonValueKind.Object ? OfficialDnsPolicyMapper.Parse(document.RootElement) : null;
@@ -227,12 +264,22 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task DeleteRecordAsync(string id, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("DNS Policy ID 不是有效的 UUID。");
         using var responseDocument = await SendAsync(HttpMethod.Delete, $"{DnsPoliciesPath}/{Uri.EscapeDataString(id)}", null, cancellationToken);
     }
 
     public async Task<IReadOnlyList<OfficialPolicyRule>> ListPoliciesAsync(OfficialPolicyKind kind, CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount)
+        {
+            var suffix = kind == OfficialPolicyKind.Acl ? "acl-rules" : "firewall-policies";
+            using var local = await SendAsync(HttpMethod.Get, $"/proxy/network/v2/api/site/{Uri.EscapeDataString(RequireSiteReference())}/{suffix}", null, cancellationToken);
+            return ReadLocalArray(local.RootElement)
+                .Select((item, index) => LocalSessionPolicyMapper.ParsePolicy(kind, item, index))
+                .OrderBy(item => item.Index)
+                .ToList();
+        }
         var path = GetPolicyPath(kind);
         var result = new List<OfficialPolicyRule>();
         var offset = 0;
@@ -258,6 +305,7 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<OfficialPolicyRule?> CreatePolicyAsync(OfficialPolicyKind kind, string requestJson, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         var normalized = OfficialPolicyJson.NormalizeAndValidate(kind, requestJson);
         using var document = await SendAsync(HttpMethod.Post, GetPolicyPath(kind), JsonNode.Parse(normalized), cancellationToken);
         return document.RootElement.ValueKind == JsonValueKind.Object ? OfficialPolicyRule.Parse(kind, document.RootElement) : null;
@@ -265,6 +313,7 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<OfficialPolicyRule?> UpdatePolicyAsync(OfficialPolicyKind kind, string id, string requestJson, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("策略 ID 不是有效的 UUID。");
         var normalized = OfficialPolicyJson.NormalizeAndValidate(kind, requestJson);
         using var document = await SendAsync(HttpMethod.Put, $"{GetPolicyPath(kind)}/{Uri.EscapeDataString(id)}", JsonNode.Parse(normalized), cancellationToken);
@@ -273,12 +322,14 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task DeletePolicyAsync(OfficialPolicyKind kind, string id, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("策略 ID 不是有效的 UUID。");
         using var responseDocument = await SendAsync(HttpMethod.Delete, $"{GetPolicyPath(kind)}/{Uri.EscapeDataString(id)}", null, cancellationToken);
     }
 
     public async Task MovePolicyAsync(OfficialPolicyKind kind, string id, int direction, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         if (direction is not (-1 or 1)) throw new ArgumentOutOfRangeException(nameof(direction));
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("策略 ID 不是有效的 UUID。");
         var ordering = await GetPolicyOrderingAsync(kind, cancellationToken);
@@ -297,6 +348,7 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<PolicyOrderingSnapshot> GetPolicyOrderingAsync(OfficialPolicyKind kind, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         var path = $"{GetPolicyPath(kind)}/ordering";
         using var document = await SendAsync(HttpMethod.Get, path, null, cancellationToken);
         if (kind == OfficialPolicyKind.Acl)
@@ -320,6 +372,7 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task SetPolicyOrderingAsync(OfficialPolicyKind kind, PolicyOrderingSnapshot ordering, CancellationToken cancellationToken = default)
     {
+        RequireWriteCapability();
         var path = $"{GetPolicyPath(kind)}/ordering";
         JsonObject payload;
         if (kind == OfficialPolicyKind.Acl)
@@ -345,6 +398,7 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<IReadOnlyList<PolicyReferenceItem>> ListPolicyReferencesAsync(CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount) return [];
         var result = new List<PolicyReferenceItem>();
         var siteRoot = $"{ApiRoot}/sites/{Uri.EscapeDataString(RequireSiteId())}";
         await TryAppendReferencesAsync($"{siteRoot}/networks", "网络", result, cancellationToken);
@@ -385,11 +439,6 @@ public sealed class UniFiClient : IUniFiClient
             var text = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                if (AuthenticationMode == AuthenticationMode.LocalAccount && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                    throw new UniFiApiException(
-                        "本地账号已登录，但此 Console 的 Integration API 不接受 Cookie 会话。请改用 API Key。程序不会回退到未公开的 Network 内部接口。",
-                        (int)response.StatusCode,
-                        text.Length > 4000 ? text[..4000] : text);
                 var message = ExtractErrorMessage(text) ?? $"UniFi 请求失败（HTTP {(int)response.StatusCode}）。";
                 throw new UniFiApiException(message, (int)response.StatusCode, text.Length > 4000 ? text[..4000] : text);
             }
@@ -410,6 +459,42 @@ public sealed class UniFiClient : IUniFiClient
     private string RequireSiteId() => !string.IsNullOrWhiteSpace(SiteId)
         ? SiteId
         : throw new UniFiApiException("请先选择要管理的 UniFi 站点。");
+
+    private string RequireSiteReference() => !string.IsNullOrWhiteSpace(_selectedSite?.InternalReference)
+        ? _selectedSite.InternalReference
+        : throw new UniFiApiException("请先选择要管理的 UniFi 站点。");
+
+    private void RequireWriteCapability()
+    {
+        if (!SupportsWrites)
+            throw new UniFiApiException("当前使用本地账号 Cookie 模式，只支持读取。此写入操作仅 API Key 模式可用。");
+    }
+
+    private async Task<IReadOnlyList<UniFiSite>> ListLocalSitesAsync(CancellationToken cancellationToken)
+    {
+        using var document = await SendAsync(HttpMethod.Get, "/proxy/network/api/self/sites", null, cancellationToken);
+        var sites = new List<UniFiSite>();
+        foreach (var item in ReadLocalArray(document.RootElement))
+        {
+            var reference = GetOptionalString(item, "name") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(reference)) continue;
+            var id = GetOptionalString(item, "id") ?? GetOptionalString(item, "_id") ?? reference;
+            var name = GetOptionalString(item, "desc") ?? GetOptionalString(item, "description") ?? reference;
+            sites.Add(new UniFiSite(id, reference, name));
+        }
+        return sites;
+    }
+
+    private static IEnumerable<JsonElement> ReadLocalArray(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array) return root.EnumerateArray().ToArray();
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+            return data.EnumerateArray().ToArray();
+        return [];
+    }
+
+    private static string? GetOptionalString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private string GetPolicyPath(OfficialPolicyKind kind) => kind switch
     {

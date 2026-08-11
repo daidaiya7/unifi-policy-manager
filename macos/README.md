@@ -1,6 +1,6 @@
 # UniFi Policy Manager Dual Authentication for macOS
 
-Native macOS port supporting both API Key and UniFi OS local-account authentication, built with SwiftUI and the official Ubiquiti Integration API.
+Native macOS dual-authentication port. API Key mode provides full management through the official Ubiquiti Integration API; UniFi OS local-account Cookie mode provides read-only access through local Network session endpoints.
 
 ## Requirements
 
@@ -11,8 +11,9 @@ Native macOS port supporting both API Key and UniFi OS local-account authenticat
 ## Included
 
 - Native connection and multi-site selection
-- DNS records: forward domain, A, AAAA, CNAME, MX, TXT and SRV CRUD
-- ACL and firewall policy list, JSON create/edit, enable/disable and delete
+- API Key mode: DNS records (forward domain, A, AAAA, CNAME, MX, TXT and SRV) CRUD
+- API Key mode: ACL and firewall policy list, JSON create/edit, enable/disable and delete
+- Local-account Cookie mode: read-only DNS, ACL and firewall views when the installed Network version exposes those session endpoints
 - System and derived policies remain read-only
 - API Key or local-account password storage in macOS Keychain
 - Automatic full baseline snapshots before write operations
@@ -29,13 +30,14 @@ Backups and operation logs are stored in:
 
 The connection screen supports two modes:
 
-- API Key: sends the key to the official Integration API.
-- Local account: signs in through `/api/auth/login`, keeps the UniFi OS Cookie session and CSRF token, then accesses the same Integration API endpoints.
+- API Key: sends the key to the official Integration API and enables all write controls.
+- Local account: signs in through `/api/auth/login`, keeps the UniFi OS Cookie session and reads from local Network session endpoints. Write, delete, toggle and ordering controls are marked as API-Key-only and disabled.
 
 Local-account mode requires a UniFi OS local administrator. Ubiquiti cloud SSO,
-2FA and Passkey accounts are not supported. If the installed Integration API
-rejects Cookie authentication, the app reports that incompatibility instead of
-falling back to private Network application endpoints.
+2FA and Passkey accounts are not supported. Local session endpoint availability
+varies by Network version. A missing DNS, ACL or firewall endpoint is reported
+individually, while the other readable sections remain available; API Key mode
+continues to provide the complete supported feature set.
 
 ## Build
 

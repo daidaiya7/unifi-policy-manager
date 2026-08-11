@@ -1,14 +1,15 @@
 # UniFi Policy Manager 双认证版 4.1.1
 
-[![Build](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/autunn/unifi-policy-manager)](https://github.com/autunn/unifi-policy-manager/releases/latest)
+[![Build](https://github.com/daidaiya7/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/daidaiya7/unifi-policy-manager/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/daidaiya7/unifi-policy-manager)](https://github.com/daidaiya7/unifi-policy-manager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-UniFi Network 策略管理工具，Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式。策略管理严格使用 Ubiquiti 官方 Integration API。
+UniFi Network 双认证策略管理工具。Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式：API Key 通过 Ubiquiti Integration API 提供完整管理；本地账号建立 Cookie 会话，通过 Network 本地接口只读查看。
 
 - Windows：C# / .NET 8 / WPF 完整版
 - macOS：SwiftUI 原生端口，覆盖连接、策略浏览和单项 CRUD，仍在补齐批量与变更中心功能
-- 双认证：API Key；或 UniFi OS 本地管理员用户名和密码（不支持云端 SSO、2FA、Passkey）
+- 双认证：API Key 完整管理；或 UniFi OS 本地管理员用户名密码只读查看（不支持云端 SSO、2FA、Passkey）
+- Cookie 接口取决于 Network 版本；某个读取接口不可用时会明确标注，并提示改用 API Key，不会影响其他可用部分
 
 ## 4.x 主要变化
 
@@ -27,13 +28,23 @@ UniFi Network 策略管理工具，Windows 与 macOS 均支持 API Key 和 UniFi
 
 ## 支持范围
 
-官方 Network API 当前明确支持的 Policy Table 类型：
+API Key 模式通过官方 Integration API 支持的 Policy Table 类型：
 
 - ACL 规则：列表、新增、编辑、启停、删除、排序
 - DNS 记录：转发域名、A、AAAA、CNAME、MX、TXT、SRV 的完整 CRUD
 - 防火墙策略：列表、新增、编辑、启停、删除、排序
 
-官方公开 API 当前没有 NAT、基于策略的路由、端口转发、QoS、静态路由接口，因此 4.0 不提供这些类型，也不会调用控制器内部接口或 SSH。
+官方公开 API 当前没有 NAT、基于策略的路由、端口转发、QoS、静态路由接口，因此 4.0 不提供这些类型，也不会使用 SSH。
+
+### 认证能力矩阵
+
+| 功能 | API Key | 本地账号 Cookie |
+| --- | --- | --- |
+| 登录与多站点选择 | 支持 | 支持 |
+| DNS、ACL、防火墙读取 | 支持 | 支持；取决于 Network 版本提供的本地接口 |
+| 新增、编辑、启停、删除 | 支持 | 不支持，界面标注“仅 API Key”并禁用 |
+| 策略排序、批量写入、策略变更中心 | 支持 | 不支持，界面标注“仅 API Key”并禁用 |
+| 导出当前已读取基线 | 支持 | 支持 |
 
 ## 直接使用
 
@@ -54,7 +65,7 @@ macOS 14 或更高版本可从源码构建原生 SwiftUI 应用：
 open macos/dist/UniFi-Policy-Manager.app
 ```
 
-macOS 端使用系统钥匙串保存 API Key 或本地账号密码，并在写入前将完整基线保存到
+macOS 端使用系统钥匙串保存 API Key 或本地账号密码；API Key 模式执行写入前会将完整基线保存到
 `~/Library/Application Support/UniFiPolicyManager/backups`。当前尚未移植策略变更中心、
 212 条内置规则、XLSX 导入和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
 
@@ -65,7 +76,7 @@ macOS 端使用系统钥匙串保存 API Key 或本地账号密码，并在写�
 - UCG 使用自签名证书时不要勾选“验证 HTTPS 证书”
 - Windows 勾选“记住认证凭据”后，密钥或密码使用 DPAPI 按当前用户加密保存；macOS 使用系统钥匙串
 
-本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后与 API Key 模式一样访问 `/proxy/network/integration/v1/...`。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。程序会自动读取 Site UUID，多站点环境会显示站点选择窗口。
+本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后从 Network 本地会话接口读取站点、DNS、ACL 和防火墙数据；它不会再尝试用 Cookie 访问只接受 `X-API-Key` 的 `/proxy/network/integration/v1/...`。本地账号模式为只读，具体可读取的部分取决于已安装的 Network 版本；某一项返回不可用时，程序保留其他成功读取的内容，并标注该项可改用 API Key。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。
 
 ## 策略变更中心
 
@@ -118,7 +129,7 @@ EXE 内部直接封装了 212 条按服务分类的转发域规则，不依赖�
 - API Key、用户名和密码不写入策略基线、快照或操作日志
 - 修改前自动备份；操作日志位于 `%LOCALAPPDATA%\UniFiPolicyManager\logs\operations.ndjson`
 - 系统/派生策略保持只读
-- 不使用 SSH，不访问未公开的控制器内部接口
+- 不使用 SSH；API Key 模式只访问公开 Integration API，本地账号模式只访问 Cookie 会话可用的 Network 本地读取接口
 
 ## 演示与自测
 

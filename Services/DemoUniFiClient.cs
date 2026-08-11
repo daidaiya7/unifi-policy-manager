@@ -25,6 +25,8 @@ public sealed class DemoUniFiClient : IUniFiClient
     public string SiteId => DemoSite.Id;
     public string ApplicationVersion => "10.5.67-demo";
     public AuthenticationMode AuthenticationMode => AuthenticationMode.ApiKey;
+    public bool SupportsWrites => true;
+    public string CapabilityNotice => "演示模式支持全部界面操作，不会连接真实 UCG。";
     public IReadOnlyList<UniFiSite> Sites { get; } = [DemoSite];
 
     public DemoUniFiClient()
