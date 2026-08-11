@@ -25,18 +25,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Swift package
-        run: swift build --package-path macos --configuration release
-
       - name: Build application bundle
         run: ./macos/build-app.sh
 
       - name: Verify application signature
         run: codesign --verify --deep --strict --verbose=2 macos/dist/UniFi-Policy-Manager.app
 
+      - name: Package application bundle
+        run: ditto -c -k --sequesterRsrc --keepParent macos/dist/UniFi-Policy-Manager.app macos/dist/UniFi-Policy-Manager-macOS.zip
+
       - name: Upload macOS application
         uses: actions/upload-artifact@v4
         with:
           name: UniFi-Policy-Manager-macOS
-          path: macos/dist/UniFi-Policy-Manager.app
+          path: macos/dist/UniFi-Policy-Manager-macOS.zip
           if-no-files-found: error

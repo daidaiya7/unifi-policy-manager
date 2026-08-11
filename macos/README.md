@@ -6,7 +6,7 @@ Native macOS port built with SwiftUI and the official Ubiquiti Integration API.
 
 - macOS 14 or later
 - UniFi Cloud Gateway / Network application exposing the Integration API
-- API Key created in `unifi.ui.com -> Settings -> API Keys`
+- API Key created in the local Console under `Integrations`, or in `unifi.ui.com -> Settings -> API Keys`
 
 ## Included
 
@@ -15,7 +15,7 @@ Native macOS port built with SwiftUI and the official Ubiquiti Integration API.
 - ACL and firewall policy list, JSON create/edit, enable/disable and delete
 - System and derived policies remain read-only
 - API Key storage in macOS Keychain
-- Automatic full baseline snapshots before write operations
+- Automatic live DNS, ACL and firewall baseline snapshots before write operations
 - Manual baseline export
 - Offline demo mode
 
@@ -34,8 +34,10 @@ The source is a Swift Package. Install Xcode or Apple Command Line Tools, then r
 ```
 
 The application is written to `macos/dist/UniFi-Policy-Manager.app` and receives
-an ad-hoc local signature. Release builds still require Developer ID signing and
-Apple notarization before public distribution.
+an ad-hoc local signature. GitHub Actions packages the bundle with `ditto` before
+artifact upload so executable permissions and macOS metadata are preserved.
+Release builds still require Developer ID signing and Apple notarization before
+public distribution.
 
 Run the Swift package directly in offline demo mode with:
 

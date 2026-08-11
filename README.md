@@ -60,9 +60,9 @@ macOS 端使用系统钥匙串保存 API Key，并在写入前将完整基线保
 连接时填写：
 
 - UCG 地址，例如 `192.168.1.1`
-- 在 `unifi.ui.com → Settings → API Keys` 创建的 API Key
+- 在本地 Console → `Integrations`，或 `unifi.ui.com → Settings → API Keys` 创建的 API Key
 - UCG 使用自签名证书时不要勾选“验证 HTTPS 证书”
-- 勾选“记住 API Key”后，密钥使用 Windows DPAPI 按当前用户加密保存
+- Windows 版使用 DPAPI 按当前用户加密保存 API Key；macOS 版使用系统钥匙串
 
 程序调用 `/proxy/network/integration/v1/info` 验证 API Key，并自动读取 Site UUID。多站点环境会显示站点选择窗口。
 

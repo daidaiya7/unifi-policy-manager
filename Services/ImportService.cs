@@ -12,6 +12,7 @@ public static partial class ImportService
     private const string BundledForwardDomainResource = "UniFiDnsManager.Presets.unifi-forward-domains-by-service.csv";
 
     private static readonly IReadOnlyDictionary<string, string> HeaderAliases = BuildHeaderAliases();
+    public static StringComparer IdentityComparer { get; } = StringComparer.Ordinal;
 
     [GeneratedRegex("^[a-z][a-z0-9+.-]*://", RegexOptions.IgnoreCase)]
     private static partial Regex UrlRegex();
@@ -64,7 +65,7 @@ public static partial class ImportService
         var records = new List<DnsRecord>();
         var duplicates = new List<string>();
         var invalid = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(IdentityComparer);
         var headers = new HashSet<string>(["domain", "domains", "域名", "转发域名", "新增域名", "hostname", "host"], StringComparer.OrdinalIgnoreCase);
         var lineNumber = 0;
         foreach (var rawValue in values)
@@ -132,22 +133,26 @@ public static partial class ImportService
     public static string IdentityKey(DnsRecord source)
     {
         var record = source;
-        var fields = record.RecordType switch
+        var type = record.RecordType.Trim().ToUpperInvariant();
+        var key = record.Key.Trim().ToLowerInvariant();
+        var value = record.Value.Trim();
+        var fields = type switch
         {
-            "NS" => new[] { record.RecordType, record.Key },
-            "A" or "AAAA" or "TXT" => new[] { record.RecordType, record.Key, record.Value },
-            "CNAME" => new[] { record.RecordType, record.Key },
-            "MX" => new[] { record.RecordType, record.Key, record.Value, record.Priority.GetValueOrDefault().ToString() },
+            "NS" => new[] { type, key },
+            "A" or "AAAA" => new[] { type, key, value.ToLowerInvariant() },
+            "TXT" => new[] { type, key, record.Value },
+            "CNAME" => new[] { type, key },
+            "MX" => new[] { type, key, value.ToLowerInvariant(), record.Priority.GetValueOrDefault().ToString() },
             "SRV" => new[]
             {
-                record.RecordType, record.Key, record.Value,
+                type, key, value.ToLowerInvariant(),
                 record.Port.GetValueOrDefault().ToString(),
                 record.Priority.GetValueOrDefault().ToString(),
                 record.Weight.GetValueOrDefault().ToString()
             },
-            _ => new[] { record.RecordType, record.Key, record.Value }
+            _ => new[] { type, key, value.ToLowerInvariant() }
         };
-        return string.Join('\u001f', fields.Select(value => value.Trim().ToLowerInvariant()));
+        return string.Join('\u001f', fields);
     }
 
     public static string Describe(DnsRecord source)
@@ -174,7 +179,7 @@ public static partial class ImportService
         var records = new List<DnsRecord>();
         var duplicates = new List<string>();
         var invalid = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(IdentityComparer);
         for (var rowIndex = headerRow + 1; rowIndex < rows.Count; rowIndex++)
         {
             var row = rows[rowIndex];

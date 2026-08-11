@@ -43,11 +43,18 @@ final class AppModel: ObservableObject {
     @Published var aclRules: [PolicyRule] = []
     @Published var firewallRules: [PolicyRule] = []
     @Published var references: [PolicyReference] = []
+    @Published var writeReady = false
     @Published var search = ""
     @Published var dnsTypeFilter = "全部"
     @Published var lastBackupURL: URL?
 
     private var api: UniFiAPI?
+
+    private struct CorePolicyState {
+        let dns: [DNSRecord]
+        let acl: [PolicyRule]
+        let firewall: [PolicyRule]
+    }
 
     var targetLabel: String { demoMode ? "演示环境" : (api?.target ?? host) }
     var versionLabel: String { demoMode ? "Demo 10.4.57" : (api?.applicationVersion ?? "未知") }
@@ -106,6 +113,7 @@ final class AppModel: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
         connected = true
         demoMode = false
+        writeReady = false
         selectedPage = .overview
         await refreshAllBody()
         apiKey = ""
@@ -119,6 +127,7 @@ final class AppModel: ObservableObject {
         aclRules = DemoData.acl
         firewallRules = DemoData.firewall
         references = DemoData.references
+        writeReady = true
         selectedPage = .overview
         status = "演示模式：不会连接或修改真实 UCG"
     }
@@ -132,6 +141,7 @@ final class AppModel: ObservableObject {
         aclRules = []
         firewallRules = []
         references = []
+        writeReady = false
         search = ""
         apiKey = rememberKey ? KeychainService.load() : ""
         status = "已断开连接"
@@ -148,26 +158,25 @@ final class AppModel: ObservableObject {
     func refreshAll() { Task { await perform("正在刷新全部策略…") { await self.refreshAllBody() } } }
 
     private func refreshAllBody() async {
-        guard !demoMode, let api else { status = "演示数据已刷新"; return }
-        async let dns = api.listDNSRecords()
-        async let acl = api.listPolicies(.acl)
-        async let firewall = api.listPolicies(.firewall)
-        async let refs = api.listReferences()
+        guard !demoMode else { writeReady = true; status = "演示数据已刷新"; return }
+        guard let api else { writeReady = false; status = "尚未连接 UniFi Console"; return }
         do {
-            dnsRecords = try await dns.sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
-            aclRules = try await acl
-            firewallRules = try await firewall
-            references = await refs
+            let core = try await fetchCorePolicies()
+            apply(core)
+            references = await api.listReferences()
+            writeReady = true
             status = "已读取 DNS \(dnsRecords.count) 条、ACL \(aclRules.count) 条、防火墙 \(firewallRules.count) 条"
         } catch {
+            writeReady = false
             errorMessage = error.localizedDescription
+            status = "策略读取不完整，写入已禁用"
         }
     }
 
     func saveDNS(_ record: DNSRecord) {
         Task {
             await perform(record.id == nil ? "正在新增 DNS 记录…" : "正在更新 DNS 记录…") {
-                try self.backup(reason: record.id == nil ? "before-create-dns" : "before-update-dns")
+                try await self.backup(reason: record.id == nil ? "before-create-dns" : "before-update-dns")
                 if self.demoMode {
                     var saved = record
                     if saved.id == nil { saved.id = UUID().uuidString; self.dnsRecords.append(saved) }
@@ -185,7 +194,7 @@ final class AppModel: ObservableObject {
     func deleteDNS(_ record: DNSRecord) {
         Task {
             await perform("正在删除 DNS 记录…") {
-                try self.backup(reason: "before-delete-dns")
+                try await self.backup(reason: "before-delete-dns")
                 if self.demoMode { self.dnsRecords.removeAll { $0.stableID == record.stableID } }
                 else if let api = self.api { try await api.deleteDNS(record); await self.refreshAllBody() }
                 BackupService.log("delete dns \(record.key)")
@@ -199,7 +208,7 @@ final class AppModel: ObservableObject {
     func savePolicy(kind: PolicyKind, existing: PolicyRule?, json: String) {
         Task {
             await perform(existing == nil ? "正在新增策略…" : "正在更新策略…") {
-                try self.backup(reason: existing == nil ? "before-create-policy" : "before-update-policy")
+                try await self.backup(reason: existing == nil ? "before-create-policy" : "before-update-policy")
                 if self.demoMode {
                     let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] ?? [:]
                     let raw = String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self)
@@ -223,7 +232,7 @@ final class AppModel: ObservableObject {
     func deletePolicy(_ rule: PolicyRule) {
         Task {
             await perform("正在删除策略…") {
-                try self.backup(reason: "before-delete-policy")
+                try await self.backup(reason: "before-delete-policy")
                 if self.demoMode {
                     if rule.kind == .acl { self.aclRules.removeAll { $0.id == rule.id } } else { self.firewallRules.removeAll { $0.id == rule.id } }
                 } else if let api = self.api { try await api.deletePolicy(rule); await self.refreshAllBody() }
@@ -257,13 +266,49 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([BackupService.root.appendingPathComponent("backups")])
     }
 
-    private func backup(reason: String) throws { lastBackupURL = try BackupService.saveSnapshot(reason: reason, bundle: bundle()) }
+    private func fetchCorePolicies() async throws -> CorePolicyState {
+        guard let api else { throw UniFiError.api("尚未连接 UniFi Console。") }
+        async let dnsTask = api.listDNSRecords()
+        async let aclTask = api.listPolicies(.acl)
+        async let firewallTask = api.listPolicies(.firewall)
+        let (dns, acl, firewall) = try await (dnsTask, aclTask, firewallTask)
+        return CorePolicyState(
+            dns: dns.sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending },
+            acl: acl,
+            firewall: firewall
+        )
+    }
 
-    private func bundle() -> PolicyBundle {
-        PolicyBundle(
+    private func apply(_ core: CorePolicyState) {
+        dnsRecords = core.dns
+        aclRules = core.acl
+        firewallRules = core.firewall
+    }
+
+    private func backup(reason: String) async throws {
+        if demoMode {
+            lastBackupURL = try BackupService.saveSnapshot(reason: reason, bundle: bundle())
+            return
+        }
+        do {
+            let core = try await fetchCorePolicies()
+            apply(core)
+            writeReady = true
+            lastBackupURL = try BackupService.saveSnapshot(reason: reason, bundle: bundle(core: core))
+        } catch {
+            writeReady = false
+            throw UniFiError.api("无法读取 DNS、ACL 和防火墙的完整实时基线，写入已取消：\(error.localizedDescription)")
+        }
+    }
+
+    private func bundle(core: CorePolicyState? = nil) -> PolicyBundle {
+        let currentDNS = core?.dns ?? dnsRecords
+        let currentACL = core?.acl ?? aclRules
+        let currentFirewall = core?.firewall ?? firewallRules
+        return PolicyBundle(
             schemaVersion: 2, createdAt: Date(), target: targetLabel, site: selectedSite?.displayName ?? "",
-            siteID: selectedSite?.id ?? "", networkVersion: versionLabel, dnsRecords: dnsRecords,
-            aclRules: aclRules.map(jsonValue), firewallPolicies: firewallRules.map(jsonValue)
+            siteID: selectedSite?.id ?? "", networkVersion: versionLabel, dnsRecords: currentDNS,
+            aclRules: currentACL.map(jsonValue), firewallPolicies: currentFirewall.map(jsonValue)
         )
     }
 
