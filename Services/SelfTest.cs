@@ -56,6 +56,28 @@ public static class SelfTest
             return Task.CompletedTask;
         });
 
+        await CheckAsync("dns_txt_identity_and_same_site_update_are_case_sensitive", () =>
+        {
+            var id = Guid.NewGuid().ToString();
+            var current = new DnsRecord { Id = id, RecordType = "TXT", Key = "_token.example.com", Value = "Token=ABC", Enabled = true };
+            var desired = current.Clone();
+            desired.Value = "Token=abc";
+            if (ImportService.IdentityKey(current) == ImportService.IdentityKey(desired))
+                throw new Exception("TXT identity collapsed case-sensitive text values.");
+
+            var bundle = new PolicyBundle
+            {
+                HasDnsSection = true,
+                HasAclSection = false,
+                HasFirewallSection = false,
+                DnsRecords = [desired]
+            };
+            var plan = PolicyChangeService.BuildPlan(bundle, "self-test.json", [current], [], [], synchronizeDeletes: false);
+            if (plan.Items.Count != 1 || plan.Items[0].Action != PolicyChangeAction.Update || plan.Items[0].CurrentId != id)
+                throw new Exception("A same-site DNS record with a changed TXT value was not matched by official UUID.");
+            return Task.CompletedTask;
+        });
+
         await CheckAsync("official_acl_and_firewall_json_validation", () =>
         {
             _ = OfficialPolicyJson.NormalizeAndValidate(OfficialPolicyKind.Acl, OfficialPolicyJson.CreateTemplate(OfficialPolicyKind.Acl));

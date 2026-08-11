@@ -529,12 +529,12 @@ struct DNSRecordEditor: View {
     }
 
     private func save() {
-        if draft.recordType == "SRV" {
-            guard !draft.domain.isEmpty, !draft.service.isEmpty, !draft.protocolName.isEmpty else { localError = "SRV 必须填写域名、服务和协议。"; return }
-            draft.key = "\(draft.service).\(draft.protocolName).\(draft.domain)"
-        } else if draft.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { localError = "域名不能为空。"; return }
-        guard !draft.value.isEmpty else { localError = "记录值不能为空。"; return }
-        onSave(draft); dismiss()
+        do {
+            onSave(try UniFiPayloadValidator.normalizeDNS(draft))
+            dismiss()
+        } catch {
+            localError = error.localizedDescription
+        }
     }
 }
 
@@ -656,11 +656,11 @@ struct PolicyJSONEditor: View {
 
     private func save() {
         do {
-            guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any], object["name"] is String, object["enabled"] is Bool else {
-                localError = "必须是包含 name 和 enabled 的 JSON 对象。"; return
-            }
-            onSave(json); dismiss()
-        } catch { localError = "JSON 格式错误：\(error.localizedDescription)" }
+            let object = try UniFiPayloadValidator.policyPayload(kind, json: json)
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            onSave(String(decoding: data, as: UTF8.self))
+            dismiss()
+        } catch { localError = error.localizedDescription }
     }
 
     private static func template(_ kind: PolicyKind) -> String {

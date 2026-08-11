@@ -116,9 +116,14 @@ public static class PolicyChangeService
         bool synchronizeDeletes)
     {
         var currentByKey = currentRecords
-            .GroupBy(ImportService.IdentityKey, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(ImportService.IdentityKey, ImportService.IdentityComparer)
+            .ToDictionary(group => group.Key, group => group.ToList(), ImportService.IdentityComparer);
+        var currentById = currentRecords
+            .Where(record => !string.IsNullOrWhiteSpace(record.Id))
+            .GroupBy(record => record.Id!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var desiredKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var desiredKeys = new HashSet<string>(ImportService.IdentityComparer);
+        var matchedCurrent = new HashSet<DnsRecord>();
         var hasInvalid = false;
 
         foreach (var desiredSource in desiredRecords)
@@ -134,7 +139,13 @@ public static class PolicyChangeService
                     continue;
                 }
 
-                if (!currentByKey.TryGetValue(key, out var current))
+                DnsRecord? current = null;
+                if (!string.IsNullOrWhiteSpace(desired.Id) && currentById.TryGetValue(desired.Id, out var byId) && !matchedCurrent.Contains(byId))
+                    current = byId;
+                else if (currentByKey.TryGetValue(key, out var byKey))
+                    current = byKey.FirstOrDefault(record => !matchedCurrent.Contains(record));
+
+                if (current is null)
                 {
                     items.Add(new PolicyChangeItem
                     {
@@ -147,6 +158,7 @@ public static class PolicyChangeService
                 }
                 else if (!DnsContentEquals(current, desired))
                 {
+                    matchedCurrent.Add(current);
                     items.Add(new PolicyChangeItem
                     {
                         Scope = PolicyChangeScope.Dns,
@@ -160,6 +172,7 @@ public static class PolicyChangeService
                 }
                 else
                 {
+                    matchedCurrent.Add(current);
                     items.Add(new PolicyChangeItem
                     {
                         Scope = PolicyChangeScope.Dns,
@@ -181,7 +194,7 @@ public static class PolicyChangeService
         }
 
         if (!synchronizeDeletes || hasInvalid) return;
-        foreach (var current in currentRecords.Where(record => !desiredKeys.Contains(ImportService.IdentityKey(record))))
+        foreach (var current in currentRecords.Where(record => !matchedCurrent.Contains(record)))
         {
             items.Add(new PolicyChangeItem
             {
@@ -293,7 +306,7 @@ public static class PolicyChangeService
     private static bool DnsContentEquals(DnsRecord left, DnsRecord right) =>
         string.Equals(left.RecordType, right.RecordType, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.Key, right.Key, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(left.Value, right.Value, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Value, right.Value, left.RecordType == "TXT" ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase) &&
         left.Enabled == right.Enabled &&
         left.Ttl.GetValueOrDefault() == right.Ttl.GetValueOrDefault() &&
         left.Priority.GetValueOrDefault() == right.Priority.GetValueOrDefault() &&

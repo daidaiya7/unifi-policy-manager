@@ -429,7 +429,7 @@ public partial class MainWindow : Window
         if (editor.ShowDialog() != true || editor.ResultJson is null) return;
         await RunBusyAsync(existing is null ? "正在创建策略…" : "正在更新策略…", async () =>
         {
-            var backup = await _backupService.SaveObjectSnapshotAsync(existing is null ? "before-policy-create" : "before-policy-update", FullSnapshot());
+            var backup = await _backupService.SaveObjectSnapshotAsync(existing is null ? "before-policy-create" : "before-policy-update", await CaptureBundleAsync());
             if (existing is null) await RequireClient().CreatePolicyAsync(kind, editor.ResultJson);
             else await RequireClient().UpdatePolicyAsync(kind, existing.Id, editor.ResultJson);
             await _backupService.LogOperationAsync(new { kind = existing is null ? "policy_create" : "policy_update", policyKind = kind.ToString(), id = existing?.Id, backup });
@@ -443,7 +443,7 @@ public partial class MainWindow : Window
         if ((sender as FrameworkElement)?.Tag is not OfficialPolicyRule { CanModify: true } rule) return;
         await RunBusyAsync("正在切换策略状态…", async () =>
         {
-            var backup = await _backupService.SaveObjectSnapshotAsync("before-policy-toggle", FullSnapshot());
+            var backup = await _backupService.SaveObjectSnapshotAsync("before-policy-toggle", await CaptureBundleAsync());
             var requestJson = OfficialPolicyJson.WithEnabled(rule.Kind, rule.ToEditableJson(), !rule.Enabled);
             await RequireClient().UpdatePolicyAsync(rule.Kind, rule.Id, requestJson);
             await _backupService.LogOperationAsync(new { kind = "policy_toggle", policyKind = rule.Kind.ToString(), rule.Id, enabled = !rule.Enabled, backup });
@@ -458,7 +458,7 @@ public partial class MainWindow : Window
         if (MessageBox.Show(this, $"确定删除策略“{rule.Name}”吗？\n\n删除前会保存 ACL、DNS 和防火墙完整快照。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         await RunBusyAsync("正在删除策略…", async () =>
         {
-            var backup = await _backupService.SaveObjectSnapshotAsync("before-policy-delete", FullSnapshot());
+            var backup = await _backupService.SaveObjectSnapshotAsync("before-policy-delete", await CaptureBundleAsync());
             await RequireClient().DeletePolicyAsync(rule.Kind, rule.Id);
             await _backupService.LogOperationAsync(new { kind = "policy_delete", policyKind = rule.Kind.ToString(), rule = JsonSerializer.Deserialize<JsonElement>(rule.RawResponseJson), backup });
             await RefreshPoliciesAsync(rule.Kind);
@@ -475,7 +475,7 @@ public partial class MainWindow : Window
         if ((sender as FrameworkElement)?.Tag is not OfficialPolicyRule { CanModify: true } rule) return;
         await RunBusyAsync("正在调整策略顺序…", async () =>
         {
-            var backup = await _backupService.SaveObjectSnapshotAsync("before-policy-reorder", FullSnapshot());
+            var backup = await _backupService.SaveObjectSnapshotAsync("before-policy-reorder", await CaptureBundleAsync());
             await RequireClient().MovePolicyAsync(rule.Kind, rule.Id, direction);
             await _backupService.LogOperationAsync(new { kind = "policy_reorder", policyKind = rule.Kind.ToString(), rule.Id, direction, backup });
             await RefreshPoliciesAsync(rule.Kind);
@@ -714,13 +714,20 @@ public partial class MainWindow : Window
     private async Task<PolicyBundle> CaptureBundleAsync()
     {
         var client = RequireClient();
+        var dnsTask = client.ListRecordsAsync();
+        var aclTask = client.ListPoliciesAsync(OfficialPolicyKind.Acl);
+        var firewallTask = client.ListPoliciesAsync(OfficialPolicyKind.Firewall);
+        await Task.WhenAll(dnsTask, aclTask, firewallTask);
         PolicyOrderingSnapshot? aclOrdering = null;
         PolicyOrderingSnapshot? firewallOrdering = null;
         try { aclOrdering = await client.GetPolicyOrderingAsync(OfficialPolicyKind.Acl); }
         catch (UniFiApiException exception) when (exception.StatusCode is 403 or 404) { }
         try { firewallOrdering = await client.GetPolicyOrderingAsync(OfficialPolicyKind.Firewall); }
         catch (UniFiApiException exception) when (exception.StatusCode is 403 or 404) { }
-        return PolicyChangeService.CaptureBundle(client, _records.ToList(), _aclRules.ToList(), _firewallRules.ToList(), aclOrdering, firewallOrdering);
+        var dns = await dnsTask;
+        var acl = await aclTask;
+        var firewall = await firewallTask;
+        return PolicyChangeService.CaptureBundle(client, dns, acl, firewall, aclOrdering, firewallOrdering);
     }
 
     private void ImportButton_Click(object sender, RoutedEventArgs e)
@@ -784,7 +791,7 @@ public partial class MainWindow : Window
         try
         {
             var input = ImportService.ParseText(BatchRulesTextBox.Text, BatchDnsServerTextBox.Text.Trim());
-            var existingKeys = _records.Select(ImportService.IdentityKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var existingKeys = _records.Select(ImportService.IdentityKey).ToHashSet(ImportService.IdentityComparer);
             var existing = input.Records.Where(record => existingKeys.Contains(ImportService.IdentityKey(record))).ToList();
             var pending = input.Records.Where(record => !existingKeys.Contains(ImportService.IdentityKey(record))).ToList();
             var preview = new BatchPreview(pending, existing, input.DuplicateInput, input.Invalid);
@@ -800,7 +807,7 @@ public partial class MainWindow : Window
         {
             var backup = await _backupService.SaveSnapshotAsync("before-dns-batch-add", Snapshot());
             var client = RequireClient();
-            var currentKeys = _records.Select(ImportService.IdentityKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var currentKeys = _records.Select(ImportService.IdentityKey).ToHashSet(ImportService.IdentityComparer);
             var created = new List<DnsRecord>();
             var failed = new List<string>();
             foreach (var record in preview.Pending)
@@ -955,22 +962,10 @@ public partial class MainWindow : Window
 
     private IReadOnlyList<DnsRecord> Snapshot() => _records.Select(record => record.Clone()).ToList();
 
-    private object FullSnapshot() => new
-    {
-        created_at = DateTimeOffset.Now,
-        target = _client?.Target,
-        site = _client?.Site,
-        site_id = _client?.SiteId,
-        network_version = _client?.ApplicationVersion,
-        dns_records = Snapshot(),
-        acl_rules = _aclRules.Select(rule => JsonSerializer.Deserialize<JsonElement>(rule.RawResponseJson)).ToList(),
-        firewall_policies = _firewallRules.Select(rule => JsonSerializer.Deserialize<JsonElement>(rule.RawResponseJson)).ToList()
-    };
-
     private DnsRecord? FindMatchingRecord(DnsRecord target)
     {
         var identity = ImportService.IdentityKey(target);
-        return _records.LastOrDefault(record => string.Equals(ImportService.IdentityKey(record), identity, StringComparison.OrdinalIgnoreCase));
+        return _records.LastOrDefault(record => string.Equals(ImportService.IdentityKey(record), identity, StringComparison.Ordinal));
     }
 
     private IUniFiClient RequireClient() => _client ?? throw new UniFiApiException("请先连接 UCG。");

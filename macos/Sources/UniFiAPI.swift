@@ -82,12 +82,12 @@ final class UniFiAPI: @unchecked Sendable {
     }
 
     func createDNS(_ record: DNSRecord) async throws {
-        _ = try await request(path: sitePath("dns/policies"), method: "POST", body: try dnsPayload(record))
+        _ = try await request(path: sitePath("dns/policies"), method: "POST", body: try UniFiPayloadValidator.dnsPayload(record))
     }
 
     func updateDNS(_ record: DNSRecord) async throws {
         guard let id = record.id else { throw UniFiError.api("DNS 记录缺少 ID。") }
-        _ = try await request(path: sitePath("dns/policies/\(id)"), method: "PUT", body: try dnsPayload(record))
+        _ = try await request(path: sitePath("dns/policies/\(id)"), method: "PUT", body: try UniFiPayloadValidator.dnsPayload(record))
     }
 
     func deleteDNS(_ record: DNSRecord) async throws {
@@ -100,12 +100,12 @@ final class UniFiAPI: @unchecked Sendable {
     }
 
     func createPolicy(_ kind: PolicyKind, json: String) async throws {
-        let body = try policyPayload(json)
+        let body = try UniFiPayloadValidator.policyPayload(kind, json: json)
         _ = try await request(path: sitePath(kind.apiPath), method: "POST", body: body)
     }
 
     func updatePolicy(_ rule: PolicyRule, json: String) async throws {
-        let body = try policyPayload(json)
+        let body = try UniFiPayloadValidator.policyPayload(rule.kind, json: json)
         _ = try await request(path: sitePath("\(rule.kind.apiPath)/\(rule.id)"), method: "PUT", body: body)
     }
 
@@ -165,7 +165,10 @@ final class UniFiAPI: @unchecked Sendable {
         guard let http = response as? HTTPURLResponse else { throw UniFiError.invalidResponse("UCG 没有返回 HTTP 响应。") }
         if !(200..<300).contains(http.statusCode) {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let message = object?["message"] as? String ?? "UniFi 请求失败（HTTP \(http.statusCode)）。"
+            var message = object?["message"] as? String ?? "UniFi 请求失败（HTTP \(http.statusCode)）。"
+            if let code = object?["code"] as? String, !code.isEmpty { message += " [\(code)]" }
+            if let requestID = object?["requestId"] as? String, !requestID.isEmpty { message += "；Request ID: \(requestID)" }
+            if object == nil, !data.isEmpty { message += " 控制器返回了非 JSON 错误页面，请确认填写的是 Console 根地址。" }
             throw UniFiError.api(message)
         }
         if data.isEmpty { return [:] }
@@ -202,30 +205,6 @@ final class UniFiAPI: @unchecked Sendable {
         return record
     }
 
-    private func dnsPayload(_ record: DNSRecord) throws -> [String: Any] {
-        guard !record.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw UniFiError.api("域名不能为空。") }
-        let apiType = [
-            "NS": "FORWARD_DOMAIN", "A": "A_RECORD", "AAAA": "AAAA_RECORD",
-            "CNAME": "CNAME_RECORD", "MX": "MX_RECORD", "TXT": "TXT_RECORD", "SRV": "SRV_RECORD"
-        ][record.recordType]
-        guard let apiType else { throw UniFiError.api("不支持的 DNS 类型。") }
-        var payload: [String: Any] = ["type": apiType, "enabled": record.enabled, "domain": record.recordType == "SRV" ? record.domain : record.key]
-        switch record.recordType {
-        case "NS": payload["ipAddress"] = record.value
-        case "A": payload["ipv4Address"] = record.value; payload["ttlSeconds"] = record.ttl ?? 0
-        case "AAAA": payload["ipv6Address"] = record.value; payload["ttlSeconds"] = record.ttl ?? 0
-        case "CNAME": payload["targetDomain"] = record.value; payload["ttlSeconds"] = record.ttl ?? 0
-        case "MX": payload["mailServerDomain"] = record.value; payload["priority"] = record.priority ?? 0
-        case "TXT": payload["text"] = record.value
-        case "SRV":
-            payload["service"] = record.service; payload["protocol"] = record.protocolName
-            payload["serverDomain"] = record.value; payload["port"] = record.port ?? 0
-            payload["priority"] = record.priority ?? 0; payload["weight"] = record.weight ?? 0
-        default: break
-        }
-        return payload
-    }
-
     private func parsePolicy(_ item: [String: Any], kind: PolicyKind) -> PolicyRule {
         let metadata = item["metadata"] as? [String: Any]
         let actionObject = item["action"] as? [String: Any]
@@ -240,16 +219,4 @@ final class UniFiAPI: @unchecked Sendable {
         )
     }
 
-    private func policyPayload(_ json: String) throws -> [String: Any] {
-        guard var object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
-            throw UniFiError.api("策略请求体必须是 JSON 对象。")
-        }
-        guard object["name"] as? String != nil, object["enabled"] as? Bool != nil else {
-            throw UniFiError.api("策略 JSON 缺少 name 或 enabled。")
-        }
-        object.removeValue(forKey: "id")
-        object.removeValue(forKey: "index")
-        object.removeValue(forKey: "metadata")
-        return object
-    }
 }
