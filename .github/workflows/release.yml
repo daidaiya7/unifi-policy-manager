@@ -68,10 +68,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
@@ -123,7 +123,7 @@ jobs:
             -CompressionLevel Optimal
 
       - name: Upload Windows package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-windows
           path: dist/UniFi-Policy-Manager-${{ needs.validate.outputs.version }}-win-x64.zip
@@ -135,7 +135,7 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set application version
         env:
@@ -160,7 +160,7 @@ jobs:
           macos/dist/UniFi-Policy-Manager-$RELEASE_VERSION-macOS.zip
 
       - name: Upload macOS package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-macos
           path: macos/dist/UniFi-Policy-Manager-${{ needs.validate.outputs.version }}-macOS.zip
@@ -175,13 +175,13 @@ jobs:
       contents: write
     steps:
       - name: Download Windows package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-windows
           path: dist
 
       - name: Download macOS package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-macos
           path: dist
