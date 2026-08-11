@@ -45,5 +45,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: UniFi-Policy-Manager-win-x64
-          path: artifact/UniFi-Policy-Manager.exe
+          path: artifact/**
           if-no-files-found: error

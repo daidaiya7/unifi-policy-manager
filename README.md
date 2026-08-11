@@ -1,4 +1,4 @@
-# UniFi Policy Manager 4.0.2 — C# / .NET 8 / WPF
+# UniFi Policy Manager 4.1.0 — C# / .NET 8 / WPF
 
 [![Build](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/autunn/unifi-policy-manager)](https://github.com/autunn/unifi-policy-manager/releases/latest)
@@ -6,8 +6,9 @@
 
 原生 Windows 桌面版 UniFi Network 策略管理工具，严格使用 Ubiquiti 官方 Integration API。
 
-## 4.0 主要变化
+## 4.x 主要变化
 
+- 4.1.0：发布包内置 212 条按服务分类的转发域 CSV，选择文件后即可预览、去重并批量新增
 - 4.0.2：改用单元格模板强制策略变更、DNS、ACL、防火墙表格的正文、复选框和操作按钮垂直居中
 
 - 全新侧边栏工作台：概览、策略变更中心、DNS、ACL、防火墙独立页面
@@ -34,7 +35,7 @@
 双击：
 
 ```text
-publish-4.0.2\UniFi-Policy-Manager.exe
+publish-4.1.0\UniFi-Policy-Manager.exe
 ```
 
 连接时填写：
@@ -84,6 +85,13 @@ ACL 和防火墙使用完整 JSON 请求体编辑器，以覆盖官方 Schema �
 - 自动规范化、验证、去重并跳过已存在记录
 - 批量删除目前仍只限转发域名
 
+发布包的 `Presets\unifi-forward-domains-by-service.csv` 内置 212 条按服务分类的转发域规则。CSV 的 DNS 服务器列故意留空，使用时：
+
+1. 在“转发域默认 DNS 服务器”中填写自己的 DNS 服务地址；如果已有转发域，程序会尝试自动填充。
+2. 点击“选择规则文件”，文件窗口会默认打开 `Presets` 目录。
+3. 选择内置 CSV，检查导入统计，然后点击“预览并新增”。
+4. 程序会跳过已存在规则，并在正式新增前显示完整预览。
+
 ## 安全
 
 - API Key 使用 Windows DPAPI 当前用户加密，设置文件中不保存明文
@@ -95,11 +103,11 @@ ACL 和防火墙使用完整 JSON 请求体编辑器，以覆盖官方 Schema �
 ## 演示与自测
 
 ```powershell
-.\publish-4.0.2\UniFi-Policy-Manager.exe --demo
+.\publish-4.1.0\UniFi-Policy-Manager.exe --demo
 ```
 
 ```powershell
-Start-Process .\publish-4.0.2\UniFi-Policy-Manager.exe -ArgumentList '--self-test','--self-test-output=self-test.json' -Wait
+Start-Process .\publish-4.1.0\UniFi-Policy-Manager.exe -ArgumentList '--self-test','--self-test-output=self-test.json' -Wait
 ```
 
 ## 构建
@@ -113,8 +121,8 @@ Start-Process .\publish-4.0.2\UniFi-Policy-Manager.exe -ArgumentList '--self-tes
 输出：
 
 ```text
-publish-4.0.2\UniFi-Policy-Manager.exe
-UniFi-Policy-Manager-4.0.2-win-x64.zip
+publish-4.1.0\UniFi-Policy-Manager.exe
+UniFi-Policy-Manager-4.1.0-win-x64.zip
 ```
 
 也可以直接使用标准 .NET 命令：

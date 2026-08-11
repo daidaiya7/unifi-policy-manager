@@ -338,6 +338,19 @@ public static class SelfTest
             return Task.CompletedTask;
         });
 
+        await CheckAsync("bundled_forward_domain_preset", () =>
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "Presets", "unifi-forward-domains-by-service.csv");
+            if (!File.Exists(path)) throw new Exception("The bundled forward-domain preset was not copied to the application output.");
+            const string dnsServer = "192.0.2.53";
+            var result = ImportService.ImportFile(path, dnsServer);
+            if (result.Records.Count != 212 || result.DuplicateInput.Count != 0 || result.Invalid.Count != 0)
+                throw new Exception($"Expected bundled preset 212/0/0, got {result.Records.Count}/{result.DuplicateInput.Count}/{result.Invalid.Count}.");
+            if (result.Records.Any(record => record.RecordType != "NS" || record.Value != dnsServer))
+                throw new Exception("The bundled preset did not apply the user-supplied default DNS server to every forward domain.");
+            return Task.CompletedTask;
+        });
+
         var realXlsx = Environment.GetEnvironmentVariable("UNIFI_DNS_TEST_XLSX");
         if (!string.IsNullOrWhiteSpace(realXlsx) && File.Exists(realXlsx))
         {
