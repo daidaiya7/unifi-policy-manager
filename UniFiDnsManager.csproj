@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>UniFiDnsManager</RootNamespace>
+    <AssemblyName>UniFi-Policy-Manager</AssemblyName>
+    <Version>4.0.2</Version>
+    <AssemblyVersion>4.0.2.0</AssemblyVersion>
+    <FileVersion>4.0.2.0</FileVersion>
+    <Product>UniFi Policy Manager</Product>
+    <Company>Local Utility</Company>
+    <Description>Official UniFi Network ACL, DNS and Firewall policy manager</Description>
+    <ApplicationIcon>Assets\UniFi.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\UniFi.ico" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,39 @@
+# Local SDKs and helper runtimes
+/.dotnet/
+/.tools/
+
+# Visual Studio / editors
+/.vs/
+/.vscode/
+/.idea/
+*.suo
+*.user
+*.userosscache
+
+# .NET build and publish outputs
+**/bin/
+**/obj/
+/publish*/
+/*.zip
+/TestResults/
+
+# Local diagnostics and UI verification artifacts
+/*.png
+*.log
+*.pid
+self-test*.json
+
+# Local secrets, settings, backups and operation logs
+.env
+.env.*
+settings.json
+backups/
+logs/
+*.ndjson
+*.key
+*.pem
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,42 @@
+<Window x:Class="UniFiDnsManager.SiteSelectionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="选择 UniFi 站点" Width="560" Height="430" MinWidth="480" MinHeight="360"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Icon="Assets/UniFi.ico">
+    <Border Padding="24">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="UNIFI NETWORK" Foreground="{StaticResource PrimaryBrush}" FontSize="11" FontWeight="Bold"/>
+                <TextBlock Text="选择要管理的站点" FontSize="23" FontWeight="Bold" Margin="0,3,0,5"/>
+                <TextBlock Text="官方 API 使用 Site UUID。程序已自动读取可用站点。" Foreground="{StaticResource MutedBrush}"/>
+            </StackPanel>
+
+            <ListBox x:Name="SitesListBox" Grid.Row="1" Margin="0,18,0,18" BorderBrush="{StaticResource LineBrush}"
+                     MouseDoubleClick="SitesListBox_MouseDoubleClick">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Border Padding="12,9">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="15"/>
+                                <TextBlock Foreground="{StaticResource MutedBrush}" FontFamily="Consolas" FontSize="11">
+                                    <Run Text="{Binding InternalReference}"/><Run Text="  ·  "/><Run Text="{Binding Id}"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="取消" Width="90" Click="CancelButton_Click"/>
+                <Button Content="使用此站点" Width="115" Margin="9,0,0,0" Style="{StaticResource PrimaryButton}" Click="SelectButton_Click"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

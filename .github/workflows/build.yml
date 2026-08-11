@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore UniFiDnsManager.csproj
+
+      - name: Build
+        run: dotnet build UniFiDnsManager.csproj --configuration Release --no-restore
+
+      - name: Publish self-contained Windows build
+        run: >-
+          dotnet publish UniFiDnsManager.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -p:PublishTrimmed=false
+          --output artifact
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UniFi-Policy-Manager-win-x64
+          path: artifact/UniFi-Policy-Manager.exe
+          if-no-files-found: error
