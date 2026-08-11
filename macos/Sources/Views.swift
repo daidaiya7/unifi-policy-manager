@@ -58,7 +58,7 @@ struct LoginView: View {
                     Text("UniFi 策略管理")
                         .font(.system(size: 35, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("通过 Ubiquiti 官方 Integration API 管理 DNS、ACL 与防火墙策略。修改前自动保存完整快照。")
+                    Text("通过 Ubiquiti 官方 Integration API 管理 DNS、ACL 与防火墙策略。修改前重新读取并保存完整快照。")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.white.opacity(0.68))
                         .lineSpacing(6)
@@ -66,7 +66,7 @@ struct LoginView: View {
                         .padding(.top, 18)
                     VStack(alignment: .leading, spacing: 15) {
                         LoginFeature(icon: "checkmark.shield", text: "官方 API，不使用 SSH 或内部端点")
-                        LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前自动保存恢复基线")
+                        LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前重新读取并保存实时基线")
                         LoginFeature(icon: "key", text: "API Key 存储在 macOS 钥匙串")
                     }
                     .padding(.top, 34)
@@ -105,6 +105,12 @@ struct LoginView: View {
                     .frame(height: 260)
                     .padding(.horizontal, -20)
                     .padding(.top, 14)
+
+                    Text("API Key 可在本地 Console → Integrations，或 unifi.ui.com → Settings → API Keys 创建。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 14)
 
                     Button { model.connect() } label: {
                         Label("连接并读取策略", systemImage: "arrow.right.circle.fill")
@@ -310,14 +316,14 @@ struct OverviewView: View {
                             Divider()
                             ActionRow(icon: "square.and.arrow.up", title: "导出当前基线", subtitle: "保存 DNS、ACL 和防火墙完整快照") { model.exportBaseline() }
                             Divider()
-                            ActionRow(icon: "folder", title: "查看自动备份", subtitle: "每次写入前生成，便于审计和恢复") { model.revealBackups() }
+                            ActionRow(icon: "folder", title: "查看自动备份", subtitle: "每次写入前重新读取生成，便于审计和手动恢复") { model.revealBackups() }
                         }
                     }
                     .frame(maxWidth: .infinity)
 
                     GroupBox("写入保护") {
                         VStack(alignment: .leading, spacing: 17) {
-                            SafetyRow(icon: "checkmark.shield.fill", text: "修改前自动保存完整策略基线")
+                            SafetyRow(icon: "checkmark.shield.fill", text: "修改前重新读取并保存完整策略基线")
                             SafetyRow(icon: "lock.fill", text: "系统与派生策略保持只读")
                             SafetyRow(icon: "key.fill", text: "API Key 仅存储在 macOS 钥匙串")
                             SafetyRow(icon: "doc.badge.ellipsis", text: "日志与导出文件不包含 API Key")
@@ -392,6 +398,7 @@ struct DNSView: View {
                 SearchField(text: $model.search)
                 Button { editingRecord = nil; showingEditor = true } label: { Label("新增记录", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
+                    .disabled(!model.writeReady)
             }
             .padding(20)
 
@@ -404,9 +411,9 @@ struct DNSView: View {
                 TableColumn("附加参数") { record in Text(record.extraLabel).foregroundStyle(.secondary).lineLimit(1) }.width(min: 100, ideal: 150)
                 TableColumn("操作") { record in
                     HStack(spacing: 4) {
-                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: record.enabled ? "停用" : "启用") { model.toggleDNS(record) }
-                        IconAction(symbol: "pencil", help: "编辑") { editingRecord = record; showingEditor = true }
-                        IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRecord = record }
+                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: record.enabled ? "停用" : "启用") { model.toggleDNS(record) }.disabled(!model.writeReady)
+                        IconAction(symbol: "pencil", help: "编辑") { editingRecord = record; showingEditor = true }.disabled(!model.writeReady)
+                        IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRecord = record }.disabled(!model.writeReady)
                     }
                 }.width(105)
             }
@@ -419,7 +426,7 @@ struct DNSView: View {
         .alert("删除 DNS 记录？", isPresented: Binding(get: { deletingRecord != nil }, set: { if !$0 { deletingRecord = nil } })) {
             Button("取消", role: .cancel) { deletingRecord = nil }
             Button("删除", role: .destructive) { if let record = deletingRecord { model.deleteDNS(record) }; deletingRecord = nil }
-        } message: { Text("删除前会自动保存 DNS、ACL 和防火墙完整基线。") }
+        } message: { Text("删除前会重新读取并保存 DNS、ACL 和防火墙完整实时基线。") }
     }
 }
 
@@ -459,6 +466,7 @@ private struct IconAction: View {
 }
 
 struct DNSRecordEditor: View {
+    @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var draft: DNSRecord
     @State private var localError: String?
@@ -500,7 +508,7 @@ struct DNSRecordEditor: View {
                 if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
                 Spacer()
                 Button("取消") { dismiss() }
-                Button("保存") { save() }.buttonStyle(.borderedProminent)
+                Button("保存") { save() }.buttonStyle(.borderedProminent).disabled(!model.writeReady)
             }
         }
         .padding(24)
@@ -549,7 +557,7 @@ struct PolicyListView: View {
                 PageHeader(title: kind == .acl ? "ACL 规则" : "防火墙策略", subtitle: kind == .acl ? "管理官方 API 支持的 IPv4 与 MAC 访问控制规则。" : "管理用户定义防火墙策略；系统与派生策略保持只读。")
                 Spacer()
                 SearchField(text: $model.search)
-                Button { editingRule = nil; showingEditor = true } label: { Label("新增策略", systemImage: "plus") }.buttonStyle(.borderedProminent)
+                Button { editingRule = nil; showingEditor = true } label: { Label("新增策略", systemImage: "plus") }.buttonStyle(.borderedProminent).disabled(!model.writeReady)
             }.padding(20)
             Divider()
             Table(model.filteredPolicies(kind)) {
@@ -560,9 +568,9 @@ struct PolicyListView: View {
                 TableColumn("来源") { rule in Text(rule.originLabel).foregroundStyle(rule.canModify ? .primary : .secondary) }.width(100)
                 TableColumn("操作") { rule in
                     HStack(spacing: 4) {
-                        IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: rule.enabled ? "停用" : "启用") { model.togglePolicy(rule) }.disabled(!rule.canModify)
-                        IconAction(symbol: rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }
-                        IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRule = rule }.disabled(!rule.canModify)
+                        IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: rule.enabled ? "停用" : "启用") { model.togglePolicy(rule) }.disabled(!rule.canModify || !model.writeReady)
+                        IconAction(symbol: rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }.disabled(rule.canModify && !model.writeReady)
+                        IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRule = rule }.disabled(!rule.canModify || !model.writeReady)
                     }
                 }.width(105)
             }
@@ -573,7 +581,7 @@ struct PolicyListView: View {
         .alert("删除策略？", isPresented: Binding(get: { deletingRule != nil }, set: { if !$0 { deletingRule = nil } })) {
             Button("取消", role: .cancel) { deletingRule = nil }
             Button("删除", role: .destructive) { if let rule = deletingRule { model.deletePolicy(rule) }; deletingRule = nil }
-        } message: { Text("删除前会自动保存完整策略基线。系统与派生策略不能删除。") }
+        } message: { Text("删除前会重新读取并保存完整实时策略基线。系统与派生策略不能删除。") }
     }
 }
 
@@ -612,7 +620,7 @@ struct PolicyJSONEditor: View {
                     if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
                     Spacer()
                     Button("关闭") { dismiss() }
-                    if rule?.canModify != false { Button("验证并保存") { save() }.buttonStyle(.borderedProminent) }
+                    if rule?.canModify != false { Button("验证并保存") { save() }.buttonStyle(.borderedProminent).disabled(!model.writeReady) }
                 }
             }
             .padding(22)
