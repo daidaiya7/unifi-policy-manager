@@ -1,13 +1,14 @@
-# UniFi Policy Manager 4.1.1
+# UniFi Policy Manager 双认证版 4.1.1
 
 [![Build](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/autunn/unifi-policy-manager)](https://github.com/autunn/unifi-policy-manager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-UniFi Network 策略管理工具，严格使用 Ubiquiti 官方 Integration API。
+UniFi Network 策略管理工具，Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式。策略管理严格使用 Ubiquiti 官方 Integration API。
 
 - Windows：C# / .NET 8 / WPF 完整版
 - macOS：SwiftUI 原生端口，覆盖连接、策略浏览和单项 CRUD，仍在补齐批量与变更中心功能
+- 双认证：API Key；或 UniFi OS 本地管理员用户名和密码（不支持云端 SSO、2FA、Passkey）
 
 ## 4.x 主要变化
 

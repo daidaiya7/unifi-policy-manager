@@ -1,6 +1,6 @@
-# UniFi Policy Manager for macOS
+# UniFi Policy Manager Dual Authentication for macOS
 
-Native macOS port built with SwiftUI and the official Ubiquiti Integration API.
+Native macOS port supporting both API Key and UniFi OS local-account authentication, built with SwiftUI and the official Ubiquiti Integration API.
 
 ## Requirements
 
