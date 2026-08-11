@@ -1,10 +1,13 @@
-# UniFi Policy Manager 4.1.1 — C# / .NET 8 / WPF
+# UniFi Policy Manager 4.1.1
 
 [![Build](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/autunn/unifi-policy-manager/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/autunn/unifi-policy-manager)](https://github.com/autunn/unifi-policy-manager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-原生 Windows 桌面版 UniFi Network 策略管理工具，严格使用 Ubiquiti 官方 Integration API。
+UniFi Network 策略管理工具，严格使用 Ubiquiti 官方 Integration API。
+
+- Windows：C# / .NET 8 / WPF 完整版
+- macOS：SwiftUI 原生端口，覆盖连接、策略浏览和单项 CRUD，仍在补齐批量与变更中心功能
 
 ## 4.x 主要变化
 
@@ -33,11 +36,26 @@
 
 ## 直接使用
 
+### Windows
+
 双击：
 
 ```text
 publish-4.1.1\UniFi-Policy-Manager.exe
 ```
+
+### macOS
+
+macOS 14 或更高版本可从源码构建原生 SwiftUI 应用：
+
+```bash
+./macos/build-app.sh
+open macos/dist/UniFi-Policy-Manager.app
+```
+
+macOS 端使用系统钥匙串保存 API Key，并在写入前将完整基线保存到
+`~/Library/Application Support/UniFiPolicyManager/backups`。当前尚未移植策略变更中心、
+212 条内置规则、XLSX 导入和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
 
 连接时填写：
 
