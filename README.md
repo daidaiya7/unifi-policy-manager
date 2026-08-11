@@ -135,8 +135,11 @@ EXE 内部直接封装了 212 条按服务分类的转发域规则，不依赖�
 5. 两端全部成功后，自动创建 `v版本号` 的 GitHub Release，并同时上传：
    - `UniFi-Policy-Manager-版本号-win-x64.zip`
    - `UniFi-Policy-Manager-版本号-macOS.zip`
+   - `SHA256SUMS.txt`
 
 任一平台构建或自测失败时不会创建 Release。
+
+发布工作流默认不要求购买代码签名证书：Windows 会生成未签名 EXE，macOS 会生成启用 Hardened Runtime 的 ad-hoc 签名应用。配置证书后，工作流会自动执行 Windows Authenticode、macOS Developer ID 签名和 Apple 公证。具体配置和免费/付费选择见 [`SIGNING.md`](SIGNING.md)。
 
 ## 演示与自测
 
