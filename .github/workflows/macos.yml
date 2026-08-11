@@ -1,4 +1,4 @@
-name: macOS
+name: macOS CI
 
 on:
   push:
@@ -7,12 +7,13 @@ on:
       - "macos/**"
       - "Assets/UniFi-256.png"
       - ".github/workflows/macos.yml"
+      - ".github/workflows/release.yml"
   pull_request:
     paths:
       - "macos/**"
       - "Assets/UniFi-256.png"
       - ".github/workflows/macos.yml"
-  workflow_dispatch:
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: read

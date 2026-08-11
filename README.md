@@ -119,6 +119,25 @@ EXE 内部直接封装了 212 条按服务分类的转发域规则，不依赖�
 - 系统/派生策略保持只读
 - 不使用 SSH，不访问未公开的控制器内部接口
 
+## 一键打包与发布
+
+仓库的 GitHub Actions 分工如下：
+
+- `Windows CI` 与 `macOS CI` 只负责提交和 Pull Request 的自动编译检查。
+- 手动发布时只运行 `Package & Release`，不要分别运行两套 CI。
+
+操作步骤：
+
+1. 打开 GitHub 仓库的 `Actions` → `Package & Release` → `Run workflow`。
+2. 输入不带 `v` 的版本号，例如 `4.2.0`；创建 Release 时不能与已有 Tag/Release 重复。
+3. 根据需要选择是否标记为预发布；如果只想下载 Actions Artifacts、不创建 Release，可关闭“创建 GitHub Release”。
+4. 工作流会并行构建 Windows 与 macOS；Windows 还会运行完整自测。
+5. 两端全部成功后，自动创建 `v版本号` 的 GitHub Release，并同时上传：
+   - `UniFi-Policy-Manager-版本号-win-x64.zip`
+   - `UniFi-Policy-Manager-版本号-macOS.zip`
+
+任一平台构建或自测失败时不会创建 Release。
+
 ## 演示与自测
 
 ```powershell

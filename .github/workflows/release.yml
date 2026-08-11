@@ -1,0 +1,210 @@
+name: Package & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不带 v，例如 4.2.0；不能与现有 Release 重复）"
+        required: true
+        type: string
+      prerelease:
+        description: "标记为预发布版本"
+        required: true
+        default: false
+        type: boolean
+      publish_release:
+        description: "构建成功后创建 GitHub Release；关闭时只生成 Actions Artifacts"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Validate version and tag
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_INPUT: ${{ inputs.version }}
+          RELEASE_REF: ${{ github.ref }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          if [[ "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "::error::Package & Release must be run from the main branch."
+            exit 1
+          fi
+
+          version="${VERSION_INPUT#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must use X.Y.Z format, for example 4.2.0."
+            exit 1
+          fi
+
+          tag="v$version"
+          if [[ "$PUBLISH_RELEASE" == "true" ]] && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists. Choose a new version."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Package Windows
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore UniFiDnsManager.csproj --runtime win-x64
+
+      - name: Publish self-contained Windows build
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          dotnet publish UniFiDnsManager.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --no-restore `
+            -p:Version=$env:RELEASE_VERSION `
+            -p:AssemblyVersion="${env:RELEASE_VERSION}.0" `
+            -p:FileVersion="${env:RELEASE_VERSION}.0" `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            -p:PublishTrimmed=false `
+            --output dist/win-x64
+
+      - name: Run Windows self-test
+        shell: pwsh
+        run: |
+          $output = Join-Path $PWD "dist/self-test.json"
+          $process = Start-Process `
+            -FilePath "dist/win-x64/UniFi-Policy-Manager.exe" `
+            -ArgumentList @("--self-test", "--self-test-output=$output") `
+            -Wait -PassThru
+          Get-Content -LiteralPath $output
+          if ($process.ExitCode -ne 0) { throw "Windows self-test failed." }
+
+      - name: Create Windows ZIP
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $packageDirectory = "dist/package-windows"
+          New-Item -ItemType Directory -Path $packageDirectory | Out-Null
+          Copy-Item -LiteralPath "dist/win-x64/UniFi-Policy-Manager.exe", "README.md", "LICENSE" -Destination $packageDirectory
+          Compress-Archive `
+            -Path "$packageDirectory/*" `
+            -DestinationPath "dist/UniFi-Policy-Manager-$env:RELEASE_VERSION-win-x64.zip" `
+            -CompressionLevel Optimal
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/UniFi-Policy-Manager-${{ needs.validate.outputs.version }}-win-x64.zip
+          if-no-files-found: error
+
+  macos:
+    name: Package macOS
+    needs: validate
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set application version
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" macos/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" macos/Info.plist
+
+      - name: Build application bundle
+        run: ./macos/build-app.sh
+
+      - name: Verify application signature
+        run: codesign --verify --deep --strict --verbose=2 macos/dist/UniFi-Policy-Manager.app
+
+      - name: Create macOS ZIP
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          macos/dist/UniFi-Policy-Manager.app
+          macos/dist/UniFi-Policy-Manager-$RELEASE_VERSION-macOS.zip
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: macos/dist/UniFi-Policy-Manager-${{ needs.validate.outputs.version }}-macOS.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [validate, windows, macos]
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist
+
+      - name: Download macOS package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-macos
+          path: dist
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          options=(
+            "$RELEASE_TAG"
+            dist/*.zip
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "UniFi Policy Manager $RELEASE_VERSION"
+            --generate-notes
+          )
+          if [[ "$PRERELEASE" == "true" ]]; then
+            options+=(--prerelease)
+          else
+            options+=(--latest)
+          fi
+          gh release create "${options[@]}"
