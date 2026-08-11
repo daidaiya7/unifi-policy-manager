@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build application bundle
         run: ./macos/build-app.sh
@@ -36,7 +36,7 @@ jobs:
         run: ditto -c -k --sequesterRsrc --keepParent macos/dist/UniFi-Policy-Manager.app macos/dist/UniFi-Policy-Manager-macOS.zip
 
       - name: Upload macOS application
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: UniFi-Policy-Manager-macOS
           path: macos/dist/UniFi-Policy-Manager-macOS.zip
