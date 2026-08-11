@@ -11,6 +11,11 @@ let package = Package(
         .executableTarget(
             name: "UniFiPolicyManagerMac",
             path: "Sources"
+        ),
+        .testTarget(
+            name: "UniFiPolicyManagerMacTests",
+            dependencies: ["UniFiPolicyManagerMac"],
+            path: "Tests"
         )
     ]
 )

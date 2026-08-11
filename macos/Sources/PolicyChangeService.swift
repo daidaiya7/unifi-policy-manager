@@ -189,10 +189,10 @@ enum PolicyChangeService {
             do {
                 let editable = try editablePolicyJSON(kind: kind, value: value)
                 let sourceID = policyID(value)
-                let current = currentUserRules.first(where: { rule in
-                    guard unmatched.contains(rule.id) else { return false }
-                    if let sourceID, rule.id.caseInsensitiveCompare(sourceID) == .orderedSame { return true }
-                    return rule.name.caseInsensitiveCompare(name) == .orderedSame
+                let current = sourceID.flatMap { desiredID in
+                    currentUserRules.first(where: { unmatched.contains($0.id) && $0.id.caseInsensitiveCompare(desiredID) == .orderedSame })
+                } ?? currentUserRules.first(where: {
+                    unmatched.contains($0.id) && $0.name.caseInsensitiveCompare(name) == .orderedSame
                 })
                 guard let current else {
                     items.append(PolicyChangeItem(
