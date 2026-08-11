@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import FoundationXML
 
 struct DNSImportResult {
     var records: [DNSRecord]
@@ -265,10 +264,11 @@ enum DNSImportService {
             var rows: [Int: [Int: String]] = [:]
             for node in try document.nodes(forXPath: "//*[local-name()='c']") {
                 guard let cell = node as? XMLElement,
-                      let reference = cell.attribute(forName: "r")?.stringValue,
-                      let match = reference.firstMatch(of: /^([A-Za-z]+)(\d+)$/),
-                      let rowNumber = Int(match.2) else { continue }
-                let columnNumber = columnIndex(String(match.1))
+                      let reference = cell.attribute(forName: "r")?.stringValue else { continue }
+                let letters = String(reference.prefix { $0.isLetter })
+                let digits = String(reference.dropFirst(letters.count))
+                guard !letters.isEmpty, let rowNumber = Int(digits) else { continue }
+                let columnNumber = columnIndex(letters)
                 let type = cell.attribute(forName: "t")?.stringValue
                 var value = ""
                 if type == "inlineStr" {
