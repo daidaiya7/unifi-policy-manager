@@ -29,7 +29,8 @@ struct DNSBatchPanel: View {
                         Text("DNS 规则清单").font(.caption).foregroundStyle(.secondary)
                         TextEditor(text: $model.batchEditorText)
                             .font(.system(.caption, design: .monospaced))
-                            .frame(minHeight: 150)
+                            .frame(height: 190)
+                            .scrollIndicators(.visible)
                             .padding(6)
                             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                             .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.12)) }
