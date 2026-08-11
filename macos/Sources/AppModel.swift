@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum WorkspacePage: String, CaseIterable, Identifiable {
     case overview, changes, dns, acl, firewall
@@ -240,7 +241,10 @@ final class AppModel: ObservableObject {
 
     func chooseDNSImportFile() {
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["txt", "list", "csv", "xlsx"]
+        var contentTypes: [UTType] = [.plainText, .commaSeparatedText]
+        if let listType = UTType(filenameExtension: "list") { contentTypes.append(listType) }
+        if let xlsxType = UTType(filenameExtension: "xlsx") { contentTypes.append(xlsxType) }
+        panel.allowedContentTypes = contentTypes
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -251,7 +255,7 @@ final class AppModel: ObservableObject {
 
     func saveDNSTemplate() {
         let panel = NSSavePanel()
-        panel.allowedFileTypes = ["csv"]
+        panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "unifi-dns-rules-template.csv"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -415,7 +419,7 @@ final class AppModel: ObservableObject {
 
     func loadPolicyBaseline() {
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["json"]
+        panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {

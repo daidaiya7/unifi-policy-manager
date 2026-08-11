@@ -185,11 +185,11 @@ struct PolicyChangeView: View {
                             .toggleStyle(.checkbox)
                             .disabled(!item.action.actionable)
                         }.width(48)
-                        TableColumn("范围") { Text(item.scope.label) }.width(75)
-                        TableColumn("操作") { ChangeActionPill(action: item.action) }.width(78)
-                        TableColumn("规则") { Text(item.name).fontWeight(.medium).lineLimit(1) }.width(min: 160, ideal: 230)
-                        TableColumn("变更内容") { Text(item.details).foregroundStyle(.secondary).lineLimit(2) }.width(min: 260, ideal: 420)
-                        TableColumn("状态") { Text(item.status).lineLimit(1) }.width(min: 100, ideal: 150)
+                        TableColumn("范围") { item in Text(item.scope.label) }.width(75)
+                        TableColumn("操作") { item in ChangeActionPill(action: item.action) }.width(78)
+                        TableColumn("规则") { item in Text(item.name).fontWeight(.medium).lineLimit(1) }.width(min: 160, ideal: 230)
+                        TableColumn("变更内容") { item in Text(item.details).foregroundStyle(.secondary).lineLimit(2) }.width(min: 260, ideal: 420)
+                        TableColumn("状态") { item in Text(item.status).lineLimit(1) }.width(min: 100, ideal: 150)
                     }
                     .alternatingRowBackgrounds(.enabled)
 
