@@ -9,6 +9,7 @@ namespace UniFiDnsManager.Services;
 public static partial class ImportService
 {
     private const string EditorHeader = "类型,域名,值或服务器,TTL,优先级,权重,端口,服务,协议,启用";
+    private const string BundledForwardDomainResource = "UniFiDnsManager.Presets.unifi-forward-domains-by-service.csv";
 
     private static readonly IReadOnlyDictionary<string, string> HeaderAliases = BuildHeaderAliases();
 
@@ -30,6 +31,14 @@ public static partial class ImportService
     }
 
     public static void SaveForwardDomainCsvTemplate(string path) => SaveDnsRulesCsvTemplate(path);
+
+    public static ImportResult ImportBundledForwardDomains(string defaultDnsServer)
+    {
+        using var stream = typeof(ImportService).Assembly.GetManifestResourceStream(BundledForwardDomainResource)
+            ?? throw new InvalidOperationException("程序内置转发域规则资源不存在。");
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return ParseText(reader.ReadToEnd(), defaultDnsServer);
+    }
 
     public static ImportResult ImportFile(string path, string defaultDnsServer = "192.168.1.10")
     {

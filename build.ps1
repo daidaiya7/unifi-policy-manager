@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Version = "4.1.0"
+$Version = "4.1.1"
 $PublishDirectory = Join-Path $ProjectRoot "publish-$Version"
 
 if (-not $DotNet) {
@@ -36,9 +36,8 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
 $publishExe = Join-Path $PublishDirectory "UniFi-Policy-Manager.exe"
 $readme = Join-Path $ProjectRoot "README.md"
 $license = Join-Path $ProjectRoot "LICENSE"
-$presets = Join-Path $PublishDirectory "Presets"
 $package = Join-Path $ProjectRoot "UniFi-Policy-Manager-$Version-win-x64.zip"
-Compress-Archive -LiteralPath @($publishExe, $readme, $license, $presets) -DestinationPath $package -CompressionLevel Optimal -Force
+Compress-Archive -LiteralPath @($publishExe, $readme, $license) -DestinationPath $package -CompressionLevel Optimal -Force
 
 Write-Host "Built: $publishExe"
 Write-Host "Package: $package"

@@ -100,6 +100,7 @@ public static class SelfTest
             if (main.FindName("BatchDeletePanelButton") is null) throw new Exception("Batch delete panel button was not loaded.");
             if (main.FindName("BatchDeleteSelectionText") is null) throw new Exception("Batch delete selection summary was not loaded.");
             if (main.FindName("BatchRulesTextBox") is null) throw new Exception("Batch DNS rules editor was not loaded.");
+            if (main.FindName("LoadBundledRulesButton") is null) throw new Exception("Bundled forward-domain rules button was not loaded.");
             if (main.FindName("ChangeCenterPage") is null) throw new Exception("Policy change center was not loaded.");
             if (main.FindName("ChangePlanGrid") is null) throw new Exception("Policy change plan grid was not loaded.");
             if (main.FindName("RememberApiKeyCheckBox") is null) throw new Exception("Remember API Key checkbox was not loaded.");
@@ -340,10 +341,8 @@ public static class SelfTest
 
         await CheckAsync("bundled_forward_domain_preset", () =>
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "Presets", "unifi-forward-domains-by-service.csv");
-            if (!File.Exists(path)) throw new Exception("The bundled forward-domain preset was not copied to the application output.");
             const string dnsServer = "192.0.2.53";
-            var result = ImportService.ImportFile(path, dnsServer);
+            var result = ImportService.ImportBundledForwardDomains(dnsServer);
             if (result.Records.Count != 212 || result.DuplicateInput.Count != 0 || result.Invalid.Count != 0)
                 throw new Exception($"Expected bundled preset 212/0/0, got {result.Records.Count}/{result.DuplicateInput.Count}/{result.Invalid.Count}.");
             if (result.Records.Any(record => record.RecordType != "NS" || record.Value != dnsServer))

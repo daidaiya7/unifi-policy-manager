@@ -14,7 +14,6 @@ namespace UniFiDnsManager;
 
 public partial class MainWindow : Window
 {
-    private const string BundledForwardDomainPreset = "unifi-forward-domains-by-service.csv";
     private readonly ObservableCollection<DnsRecord> _records = [];
     private readonly ObservableCollection<OfficialPolicyRule> _aclRules = [];
     private readonly ObservableCollection<OfficialPolicyRule> _firewallRules = [];
@@ -726,31 +725,41 @@ public partial class MainWindow : Window
 
     private void ImportButton_Click(object sender, RoutedEventArgs e)
     {
-        var presetDirectory = Path.Combine(AppContext.BaseDirectory, "Presets");
-        var presetPath = Path.Combine(presetDirectory, BundledForwardDomainPreset);
         var dialog = new OpenFileDialog
         {
             Title = "导入 DNS 规则",
-            Filter = "支持的文件|*.txt;*.csv;*.xlsx|文本文件|*.txt|CSV 文件|*.csv|Excel 工作簿|*.xlsx",
-            InitialDirectory = Directory.Exists(presetDirectory) ? presetDirectory : string.Empty,
-            FileName = File.Exists(presetPath) ? BundledForwardDomainPreset : string.Empty
+            Filter = "支持的文件|*.txt;*.csv;*.xlsx|文本文件|*.txt|CSV 文件|*.csv|Excel 工作簿|*.xlsx"
         };
         if (dialog.ShowDialog(this) != true) return;
         try
         {
-            var defaultDnsServer = BatchDnsServerTextBox.Text.Trim();
-            if (Path.GetFileName(dialog.FileName).Equals(BundledForwardDomainPreset, StringComparison.OrdinalIgnoreCase) &&
-                string.IsNullOrWhiteSpace(defaultDnsServer))
-            {
-                throw new ValidationException("请先填写转发域默认 DNS 服务器，再导入内置规则文件。");
-            }
-            var result = ImportService.ImportFile(dialog.FileName, defaultDnsServer);
-            BatchRulesTextBox.Text = ImportService.FormatRecordsForEditor(result.Records);
-            var types = string.Join("、", result.Records.GroupBy(record => record.RecordType).Select(group => $"{group.Key} {group.Count()}"));
-            ImportSummaryText.Text = $"有效 {result.Records.Count} 条；文件内重复 {result.DuplicateInput.Count} 条；无效 {result.Invalid.Count} 条。{(types.Length > 0 ? $" 类型：{types}。" : string.Empty)}";
-            SetStatus($"已从 {Path.GetFileName(dialog.FileName)} 整理出 {result.Records.Count} 条 DNS 规则。");
+            var result = ImportService.ImportFile(dialog.FileName, BatchDnsServerTextBox.Text.Trim());
+            ShowImportedRules(result, Path.GetFileName(dialog.FileName));
         }
         catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void LoadBundledRulesButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var defaultDnsServer = BatchDnsServerTextBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(defaultDnsServer))
+            {
+                BatchDnsServerTextBox.Focus();
+                throw new ValidationException("请先填写转发域默认 DNS 服务器，再载入内置规则。");
+            }
+            ShowImportedRules(ImportService.ImportBundledForwardDomains(defaultDnsServer), "EXE 内置转发域规则");
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void ShowImportedRules(ImportResult result, string sourceName)
+    {
+        BatchRulesTextBox.Text = ImportService.FormatRecordsForEditor(result.Records);
+        var types = string.Join("、", result.Records.GroupBy(record => record.RecordType).Select(group => $"{group.Key} {group.Count()}"));
+        ImportSummaryText.Text = $"有效 {result.Records.Count} 条；文件内重复 {result.DuplicateInput.Count} 条；无效 {result.Invalid.Count} 条。{(types.Length > 0 ? $" 类型：{types}。" : string.Empty)}";
+        SetStatus($"已从 {sourceName} 整理出 {result.Records.Count} 条 DNS 规则。");
     }
 
     private void SaveCsvTemplateButton_Click(object sender, RoutedEventArgs e)

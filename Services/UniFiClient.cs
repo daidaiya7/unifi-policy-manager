@@ -42,7 +42,7 @@ public sealed class UniFiClient : IUniFiClient
             Timeout = TimeSpan.FromSeconds(30)
         };
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.0");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.1");
         _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
     }
 

@@ -7,9 +7,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>UniFiDnsManager</RootNamespace>
     <AssemblyName>UniFi-Policy-Manager</AssemblyName>
-    <Version>4.1.0</Version>
-    <AssemblyVersion>4.1.0.0</AssemblyVersion>
-    <FileVersion>4.1.0.0</FileVersion>
+    <Version>4.1.1</Version>
+    <AssemblyVersion>4.1.1.0</AssemblyVersion>
+    <FileVersion>4.1.1.0</FileVersion>
     <Product>UniFi Policy Manager</Product>
     <Company>Local Utility</Company>
     <Description>Official UniFi Network ACL, DNS and Firewall policy manager</Description>
@@ -17,9 +17,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\UniFi.ico" />
-    <None Update="Presets\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
+    <None Remove="Presets\unifi-forward-domains-by-service.csv" />
+    <EmbeddedResource Include="Presets\unifi-forward-domains-by-service.csv"
+                      LogicalName="UniFiDnsManager.Presets.unifi-forward-domains-by-service.csv" />
   </ItemGroup>
 </Project>
