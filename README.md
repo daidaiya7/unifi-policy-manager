@@ -7,7 +7,7 @@
 UniFi Network 策略管理工具，严格使用 Ubiquiti 官方 Integration API。
 
 - Windows：C# / .NET 8 / WPF 完整版
-- macOS：SwiftUI 原生端口，覆盖连接、策略浏览和单项 CRUD，仍在补齐批量与变更中心功能
+- macOS：SwiftUI 原生完整版，与 Windows 版共享官方 API 功能范围和安全写入流程
 
 ## 4.x 主要变化
 
@@ -54,8 +54,8 @@ open macos/dist/UniFi-Policy-Manager.app
 ```
 
 macOS 端使用系统钥匙串保存 API Key，并在写入前将完整基线保存到
-`~/Library/Application Support/UniFiPolicyManager/backups`。当前尚未移植策略变更中心、
-212 条内置规则、XLSX 导入和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
+`~/Library/Application Support/UniFiPolicyManager/backups`。macOS 已包含策略变更中心、
+212 条内置规则、TXT/CSV/XLSX 批量导入、批量删除和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
 
 连接时填写：
 

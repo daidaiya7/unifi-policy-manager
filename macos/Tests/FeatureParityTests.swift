@@ -60,6 +60,21 @@ final class FeatureParityTests: XCTestCase {
         XCTAssertTrue(bundle.hasFirewallSection)
     }
 
+    func testBundledForwardDomainCSVContains212UsableRules() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let preset = repositoryRoot.appendingPathComponent("Presets/unifi-forward-domains-by-service.csv")
+
+        let result = try DNSImportService.importFile(preset, defaultDNSServer: "192.168.1.10")
+
+        XCTAssertEqual(result.records.count, 212)
+        XCTAssertTrue(result.records.allSatisfy { $0.recordType == "NS" && $0.value == "192.168.1.10" })
+        XCTAssertTrue(result.duplicateInput.isEmpty)
+        XCTAssertTrue(result.invalid.isEmpty)
+    }
+
     func testStrictSyncControlsDeletionPlan() {
         let current = [
             DNSRecord(id: "keep", recordType: "NS", key: "keep.example.com", value: "192.168.1.10"),
