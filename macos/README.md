@@ -40,11 +40,12 @@ swift test --package-path macos
 ./macos/build-app.sh
 ```
 
-The application is written to `macos/dist/UniFi-Policy-Manager.app` and receives
-an ad-hoc local signature. GitHub Actions packages the bundle with `ditto` before
-artifact upload so executable permissions and macOS metadata are preserved.
-Release builds still require Developer ID signing and Apple notarization before
-public distribution.
+The application is written to `macos/dist/UniFi-Policy-Manager.app`, enables
+Hardened Runtime, and receives an ad-hoc local signature when no Developer ID
+identity is configured. GitHub Actions packages the bundle with `ditto` so
+executable permissions and macOS metadata are preserved. The release workflow
+automatically performs Developer ID signing and Apple notarization when the
+secrets documented in the repository root `SIGNING.md` are available.
 
 Run the Swift package directly in offline demo mode with:
 
