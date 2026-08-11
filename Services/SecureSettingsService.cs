@@ -4,7 +4,13 @@ using System.Text.Json;
 
 namespace UniFiDnsManager.Services;
 
-public sealed record ConnectionSettings(string Host, bool VerifyTls, bool RememberApiKey, string ApiKey);
+public sealed record ConnectionSettings(
+    string Host,
+    bool VerifyTls,
+    AuthenticationMode AuthenticationMode,
+    bool RememberCredential,
+    string Username,
+    string Secret);
 
 public sealed class SecureSettingsService
 {
@@ -28,20 +34,26 @@ public sealed class SecureSettingsService
         {
             var persisted = JsonSerializer.Deserialize<PersistedConnectionSettings>(File.ReadAllText(_settingsPath));
             if (persisted is null) return DefaultSettings();
-            var apiKey = string.Empty;
-            var remember = persisted.RememberApiKey && !string.IsNullOrWhiteSpace(persisted.ProtectedApiKey);
+            var mode = Enum.TryParse<AuthenticationMode>(persisted.AuthenticationMode, ignoreCase: true, out var parsedMode)
+                ? parsedMode
+                : AuthenticationMode.ApiKey;
+            var protectedSecret = persisted.ProtectedSecret ?? persisted.ProtectedApiKey;
+            var remember = (persisted.RememberCredential ?? persisted.RememberApiKey) && !string.IsNullOrWhiteSpace(protectedSecret);
+            var secret = string.Empty;
             if (remember)
             {
-                var encrypted = Convert.FromBase64String(persisted.ProtectedApiKey!);
+                var encrypted = Convert.FromBase64String(protectedSecret!);
                 var decrypted = ProtectedData.Unprotect(encrypted, OptionalEntropy, DataProtectionScope.CurrentUser);
-                apiKey = Encoding.UTF8.GetString(decrypted);
+                secret = Encoding.UTF8.GetString(decrypted);
                 CryptographicOperations.ZeroMemory(decrypted);
             }
             return new ConnectionSettings(
                 string.IsNullOrWhiteSpace(persisted.Host) ? "192.168.1.1" : persisted.Host,
                 persisted.VerifyTls,
+                mode,
                 remember,
-                apiKey);
+                persisted.Username ?? string.Empty,
+                secret);
         }
         catch
         {
@@ -49,17 +61,23 @@ public sealed class SecureSettingsService
         }
     }
 
-    public void Save(string host, bool verifyTls, bool rememberApiKey, string apiKey)
+    public void Save(
+        string host,
+        bool verifyTls,
+        AuthenticationMode authenticationMode,
+        bool rememberCredential,
+        string username,
+        string secret)
     {
-        string? protectedApiKey = null;
-        if (rememberApiKey)
+        string? protectedSecret = null;
+        if (rememberCredential)
         {
-            if (string.IsNullOrWhiteSpace(apiKey)) throw new InvalidOperationException("无法保存空的 API Key。");
-            var plaintext = Encoding.UTF8.GetBytes(apiKey);
+            if (string.IsNullOrEmpty(secret)) throw new InvalidOperationException("无法保存空的认证凭据。");
+            var plaintext = Encoding.UTF8.GetBytes(secret);
             try
             {
                 var encrypted = ProtectedData.Protect(plaintext, OptionalEntropy, DataProtectionScope.CurrentUser);
-                protectedApiKey = Convert.ToBase64String(encrypted);
+                protectedSecret = Convert.ToBase64String(encrypted);
                 CryptographicOperations.ZeroMemory(encrypted);
             }
             finally
@@ -69,11 +87,15 @@ public sealed class SecureSettingsService
         }
 
         var persisted = new PersistedConnectionSettings(
-            SchemaVersion: 1,
+            SchemaVersion: 2,
             Host: string.IsNullOrWhiteSpace(host) ? "192.168.1.1" : host.Trim(),
             VerifyTls: verifyTls,
-            RememberApiKey: rememberApiKey,
-            ProtectedApiKey: protectedApiKey);
+            AuthenticationMode: authenticationMode.ToString(),
+            RememberCredential: rememberCredential,
+            Username: authenticationMode == AuthenticationMode.LocalAccount ? username.Trim() : string.Empty,
+            ProtectedSecret: protectedSecret,
+            RememberApiKey: false,
+            ProtectedApiKey: null);
         var directory = Path.GetDirectoryName(_settingsPath) ?? throw new InvalidOperationException("设置目录无效。");
         Directory.CreateDirectory(directory);
         var temporaryPath = _settingsPath + ".tmp";
@@ -81,14 +103,20 @@ public sealed class SecureSettingsService
         File.Move(temporaryPath, _settingsPath, overwrite: true);
     }
 
-    public void ForgetApiKey(string host, bool verifyTls) => Save(host, verifyTls, rememberApiKey: false, apiKey: string.Empty);
+    public void ForgetCredential(string host, bool verifyTls, AuthenticationMode authenticationMode, string username) =>
+        Save(host, verifyTls, authenticationMode, rememberCredential: false, username, secret: string.Empty);
 
-    private static ConnectionSettings DefaultSettings() => new("192.168.1.1", VerifyTls: false, RememberApiKey: true, ApiKey: string.Empty);
+    private static ConnectionSettings DefaultSettings() =>
+        new("192.168.1.1", VerifyTls: false, AuthenticationMode.ApiKey, RememberCredential: true, Username: string.Empty, Secret: string.Empty);
 
     private sealed record PersistedConnectionSettings(
         int SchemaVersion,
         string Host,
         bool VerifyTls,
+        string? AuthenticationMode,
+        bool? RememberCredential,
+        string? Username,
+        string? ProtectedSecret,
         bool RememberApiKey,
         string? ProtectedApiKey);
 }

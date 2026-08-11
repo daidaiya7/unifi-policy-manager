@@ -22,7 +22,7 @@
                         <StackPanel Margin="0,34,0,0">
                             <TextBlock Text="✓  策略差异预览与严格同步" Foreground="#DCE7F5" FontSize="14" Margin="0,0,0,12"/>
                             <TextBlock Text="✓  DNS 全部 7 种记录批量管理" Foreground="#DCE7F5" FontSize="14" Margin="0,0,0,12"/>
-                            <TextBlock Text="✓  API Key 使用 Windows DPAPI 加密" Foreground="#DCE7F5" FontSize="14"/>
+                            <TextBlock Text="✓  API Key 或本地账号密码使用 DPAPI 加密" Foreground="#DCE7F5" FontSize="14"/>
                         </StackPanel>
                     </StackPanel>
                     <TextBlock Grid.Row="2" Text="UCG Fiber · Network API v10.4.57 compatible" Foreground="#71829B" FontSize="11"/>
@@ -33,26 +33,42 @@
                 <Border Style="{StaticResource CardBorder}" Width="650" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="44" Padding="34">
                     <StackPanel>
                         <TextBlock Text="连接 UniFi Console" FontSize="27" FontWeight="Bold"/>
-                        <TextBlock Text="使用本地地址和官方 API Key 读取策略。" Style="{StaticResource CaptionText}" FontSize="13" Margin="0,7,0,0"/>
+                        <TextBlock Text="使用官方 API Key 或 UniFi OS 本地管理员账号读取策略。" Style="{StaticResource CaptionText}" FontSize="13" Margin="0,7,0,0"/>
 
                         <TextBlock Text="UCG 地址" FontWeight="SemiBold" Margin="0,28,0,7"/>
                         <TextBox x:Name="HostTextBox" Text="192.168.1.1" FontSize="14"/>
                         <TextBlock Text="只填写 IP 或主机名，例如 192.168.1.1" Style="{StaticResource CaptionText}" Margin="0,5,0,0"/>
 
-                        <TextBlock Text="API Key" FontWeight="SemiBold" Margin="0,20,0,7"/>
-                        <PasswordBox x:Name="ApiKeyInput" FontSize="14"/>
-                        <TextBlock Text="在 unifi.ui.com → Settings → API Keys 创建" Style="{StaticResource CaptionText}" Margin="0,5,0,0"/>
+                        <TextBlock Text="认证方式" FontWeight="SemiBold" Margin="0,20,0,7"/>
+                        <ComboBox x:Name="AuthenticationModeComboBox" SelectedIndex="0" SelectionChanged="AuthenticationModeComboBox_SelectionChanged">
+                            <ComboBoxItem Content="API Key" Tag="ApiKey"/>
+                            <ComboBoxItem Content="用户名 / 密码" Tag="LocalAccount"/>
+                        </ComboBox>
+
+                        <StackPanel x:Name="ApiKeyLoginPanel" Margin="0,16,0,0">
+                            <TextBlock Text="API Key" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                            <PasswordBox x:Name="ApiKeyInput" FontSize="14"/>
+                            <TextBlock Text="在 unifi.ui.com → Settings → API Keys 创建" Style="{StaticResource CaptionText}" Margin="0,5,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel x:Name="LocalAccountLoginPanel" Margin="0,16,0,0" Visibility="Collapsed">
+                            <TextBlock Text="本地管理员用户名" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                            <TextBox x:Name="UsernameTextBox" FontSize="14"/>
+                            <TextBlock Text="本地管理员密码" FontWeight="SemiBold" Margin="0,14,0,7"/>
+                            <PasswordBox x:Name="LocalPasswordInput" FontSize="14"/>
+                            <TextBlock Text="仅支持 Console 本地管理员账号，不支持需要 2FA 或 Passkey 的云端 SSO。" Style="{StaticResource CaptionText}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+                        </StackPanel>
 
                         <StackPanel Margin="0,22,0,0">
-                            <CheckBox x:Name="RememberApiKeyCheckBox" Content="记住 API Key（Windows 当前用户加密）" IsChecked="True"/>
+                            <CheckBox x:Name="RememberCredentialCheckBox" Content="记住认证凭据（Windows 当前用户加密）" IsChecked="True"/>
                             <CheckBox x:Name="VerifyTlsCheckBox" Content="验证 UCG HTTPS 证书" Margin="0,12,0,0"/>
                         </StackPanel>
 
                         <Button Content="连接并读取策略" Style="{StaticResource PrimaryButton}" FontSize="14" Margin="0,26,0,0" Click="LoginButton_Click"/>
-                        <Button x:Name="ForgetApiKeyButton" Content="清除本机保存的 API Key" Margin="0,10,0,0" Click="ForgetApiKeyButton_Click"/>
+                        <Button x:Name="ForgetCredentialButton" Content="清除本机保存的认证凭据" Margin="0,10,0,0" Click="ForgetCredentialButton_Click"/>
 
                         <Border Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" CornerRadius="9" Padding="13" Margin="0,24,0,0">
-                            <TextBlock Text="程序不会通过聊天、日志或导出文件保存明文 API Key。" Foreground="#1E4F91" TextWrapping="Wrap" FontSize="12"/>
+                            <TextBlock Text="API Key 和密码不会通过聊天、日志、备份或导出文件保存为明文。" Foreground="#1E4F91" TextWrapping="Wrap" FontSize="12"/>
                         </Border>
                     </StackPanel>
                 </Border>
@@ -163,7 +179,7 @@
                                         <TextBlock Text="●  每次修改前自动保存快照" Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,13"/>
                                         <TextBlock Text="●  严格同步默认关闭" Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,13"/>
                                         <TextBlock Text="●  系统与派生策略保持只读" Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,13"/>
-                                        <TextBlock Text="●  API Key 不写入备份或日志" Foreground="{StaticResource SuccessBrush}"/>
+                                        <TextBlock Text="●  认证凭据不写入备份或日志" Foreground="{StaticResource SuccessBrush}"/>
                                     </StackPanel>
                                 </Border>
                             </Grid>

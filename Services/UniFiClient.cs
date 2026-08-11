@@ -13,12 +13,14 @@ public sealed class UniFiClient : IUniFiClient
     private const int PageSize = 200;
     private readonly HttpClient _httpClient;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
+    private string? _csrfToken;
     private UniFiSite? _selectedSite;
 
     public string Target { get; }
     public string Site => _selectedSite?.DisplayName ?? "未选择";
     public string SiteId => _selectedSite?.Id ?? string.Empty;
     public string ApplicationVersion { get; private set; } = "未知";
+    public AuthenticationMode AuthenticationMode { get; }
     public IReadOnlyList<UniFiSite> Sites { get; private set; } = [];
 
     private string ApiRoot => "/proxy/network/integration/v1";
@@ -26,12 +28,15 @@ public sealed class UniFiClient : IUniFiClient
     private string AclRulesPath => $"{ApiRoot}/sites/{Uri.EscapeDataString(RequireSiteId())}/acl-rules";
     private string FirewallPoliciesPath => $"{ApiRoot}/sites/{Uri.EscapeDataString(RequireSiteId())}/firewall/policies";
 
-    private UniFiClient(string target, string apiKey, bool verifyTls)
+    private UniFiClient(string target, AuthenticationMode authenticationMode, string? apiKey, bool verifyTls)
     {
         Target = NormalizeTarget(target);
+        AuthenticationMode = authenticationMode;
         var handler = new HttpClientHandler
         {
-            AutomaticDecompression = DecompressionMethods.All
+            AutomaticDecompression = DecompressionMethods.All,
+            CookieContainer = new CookieContainer(),
+            UseCookies = true
         };
         if (!verifyTls)
             handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
@@ -43,7 +48,8 @@ public sealed class UniFiClient : IUniFiClient
         };
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.1");
-        _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
+        if (authenticationMode == AuthenticationMode.ApiKey)
+            _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
     }
 
     public static async Task<UniFiClient> ConnectAsync(
@@ -55,7 +61,37 @@ public sealed class UniFiClient : IUniFiClient
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new UniFiApiException("请输入 UniFi API Key。可在 unifi.ui.com → Settings → API Keys 创建。");
 
-        var client = new UniFiClient(target, apiKey.Trim(), verifyTls);
+        var client = new UniFiClient(target, AuthenticationMode.ApiKey, apiKey.Trim(), verifyTls);
+        return await ConnectAndInitializeAsync(client, cancellationToken);
+    }
+
+    public static async Task<UniFiClient> ConnectWithLocalAccountAsync(
+        string target,
+        string username,
+        string password,
+        bool verifyTls,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            throw new UniFiApiException("请输入 UniFi OS 本地管理员用户名。");
+        if (string.IsNullOrEmpty(password))
+            throw new UniFiApiException("请输入 UniFi OS 本地管理员密码。");
+
+        var client = new UniFiClient(target, AuthenticationMode.LocalAccount, null, verifyTls);
+        try
+        {
+            await client.AuthenticateLocalAccountAsync(username.Trim(), password, cancellationToken);
+            return await ConnectAndInitializeAsync(client, cancellationToken);
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<UniFiClient> ConnectAndInitializeAsync(UniFiClient client, CancellationToken cancellationToken)
+    {
         try
         {
             using (var info = await client.SendAsync(HttpMethod.Get, $"{client.ApiRoot}/info", null, cancellationToken))
@@ -66,13 +102,49 @@ public sealed class UniFiClient : IUniFiClient
 
             client.Sites = await client.ListSitesAsync(cancellationToken);
             if (client.Sites.Count == 0)
-                throw new UniFiApiException("API Key 可用，但此 Network 应用没有返回任何可管理站点。");
+                throw new UniFiApiException("认证成功，但此 Network 应用没有返回任何可管理站点。");
             return client;
         }
         catch
         {
             client.Dispose();
             throw;
+        }
+    }
+
+    private async Task AuthenticateLocalAccountAsync(string username, string password, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new { username, password }, _jsonOptions),
+                Encoding.UTF8,
+                "application/json")
+        };
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new UniFiApiException("连接 UniFi Console 超时。");
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new UniFiApiException($"无法连接 UniFi Console：{ex.Message}");
+        }
+
+        using (response)
+        {
+            CaptureCsrfToken(response);
+            var text = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var message = ExtractErrorMessage(text) ?? "用户名或密码无效。请使用 Console 中创建的本地管理员账号。";
+                throw new UniFiApiException(message, (int)response.StatusCode, text.Length > 4000 ? text[..4000] : text);
+            }
         }
     }
 
@@ -288,6 +360,8 @@ public sealed class UniFiClient : IUniFiClient
     private async Task<JsonDocument> SendAsync(HttpMethod method, string path, object? payload, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(method, path);
+        if (AuthenticationMode == AuthenticationMode.LocalAccount && !string.IsNullOrWhiteSpace(_csrfToken))
+            request.Headers.TryAddWithoutValidation("X-CSRF-Token", _csrfToken);
         if (payload is not null)
             request.Content = new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
 
@@ -307,9 +381,15 @@ public sealed class UniFiClient : IUniFiClient
 
         using (response)
         {
+            CaptureCsrfToken(response);
             var text = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
+                if (AuthenticationMode == AuthenticationMode.LocalAccount && response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                    throw new UniFiApiException(
+                        "本地账号已登录，但此 Console 的 Integration API 不接受 Cookie 会话。请改用 API Key。程序不会回退到未公开的 Network 内部接口。",
+                        (int)response.StatusCode,
+                        text.Length > 4000 ? text[..4000] : text);
                 var message = ExtractErrorMessage(text) ?? $"UniFi 请求失败（HTTP {(int)response.StatusCode}）。";
                 throw new UniFiApiException(message, (int)response.StatusCode, text.Length > 4000 ? text[..4000] : text);
             }
@@ -317,6 +397,14 @@ public sealed class UniFiClient : IUniFiClient
             try { return JsonDocument.Parse(text); }
             catch (JsonException) { throw new UniFiApiException("UniFi 返回了非 JSON 响应。"); }
         }
+    }
+
+    private void CaptureCsrfToken(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("X-Updated-CSRF-Token", out var updated))
+            _csrfToken = updated.FirstOrDefault() ?? _csrfToken;
+        else if (response.Headers.TryGetValues("X-CSRF-Token", out var values))
+            _csrfToken = values.FirstOrDefault() ?? _csrfToken;
     }
 
     private string RequireSiteId() => !string.IsNullOrWhiteSpace(SiteId)

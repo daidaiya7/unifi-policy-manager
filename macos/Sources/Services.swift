@@ -3,9 +3,10 @@ import Security
 
 enum KeychainService {
     private static let service = "com.autunn.UniFiPolicyManagerMac"
-    private static let account = "unifi-api-key"
+    static let apiKeyAccount = "unifi-api-key"
+    static let localPasswordAccount = "unifi-local-password"
 
-    static func load() -> String {
+    static func load(account: String) -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne
@@ -15,8 +16,8 @@ enum KeychainService {
         return String(decoding: data, as: UTF8.self)
     }
 
-    static func save(_ value: String) throws {
-        forget()
+    static func save(_ value: String, account: String) throws {
+        forget(account: account)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecValueData as String: Data(value.utf8),
@@ -26,7 +27,7 @@ enum KeychainService {
         guard status == errSecSuccess else { throw UniFiError.api("无法写入 macOS 钥匙串（错误 \(status)）。") }
     }
 
-    static func forget() {
+    static func forget(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account
         ]
@@ -43,9 +44,17 @@ struct ConnectionPreferences {
         get { UserDefaults.standard.bool(forKey: "verifyTLS") }
         set { UserDefaults.standard.set(newValue, forKey: "verifyTLS") }
     }
-    static var rememberKey: Bool {
-        get { UserDefaults.standard.object(forKey: "rememberKey") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "rememberKey") }
+    static var authenticationMode: AuthenticationMode {
+        get { AuthenticationMode(rawValue: UserDefaults.standard.string(forKey: "authenticationMode") ?? "") ?? .apiKey }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "authenticationMode") }
+    }
+    static var username: String {
+        get { UserDefaults.standard.string(forKey: "username") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "username") }
+    }
+    static var rememberCredential: Bool {
+        get { UserDefaults.standard.object(forKey: "rememberCredential") as? Bool ?? (UserDefaults.standard.object(forKey: "rememberKey") as? Bool ?? true) }
+        set { UserDefaults.standard.set(newValue, forKey: "rememberCredential") }
     }
 }
 

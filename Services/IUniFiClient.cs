@@ -2,12 +2,19 @@ using UniFiDnsManager.Models;
 
 namespace UniFiDnsManager.Services;
 
+public enum AuthenticationMode
+{
+    ApiKey,
+    LocalAccount
+}
+
 public interface IUniFiClient : IDisposable
 {
     string Target { get; }
     string Site { get; }
     string SiteId { get; }
     string ApplicationVersion { get; }
+    AuthenticationMode AuthenticationMode { get; }
     IReadOnlyList<UniFiSite> Sites { get; }
     void SelectSite(UniFiSite site);
     Task<IReadOnlyList<UniFiSite>> ListSitesAsync(CancellationToken cancellationToken = default);

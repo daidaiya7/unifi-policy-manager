@@ -53,18 +53,18 @@ macOS 14 或更高版本可从源码构建原生 SwiftUI 应用：
 open macos/dist/UniFi-Policy-Manager.app
 ```
 
-macOS 端使用系统钥匙串保存 API Key，并在写入前将完整基线保存到
+macOS 端使用系统钥匙串保存 API Key 或本地账号密码，并在写入前将完整基线保存到
 `~/Library/Application Support/UniFiPolicyManager/backups`。当前尚未移植策略变更中心、
 212 条内置规则、XLSX 导入和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
 
 连接时填写：
 
 - UCG 地址，例如 `192.168.1.1`
-- 在 `unifi.ui.com → Settings → API Keys` 创建的 API Key
+- 选择 API Key，并填写在 `unifi.ui.com → Settings → API Keys` 创建的密钥；或选择本地账号，填写 UniFi OS 本地管理员用户名和密码
 - UCG 使用自签名证书时不要勾选“验证 HTTPS 证书”
-- 勾选“记住 API Key”后，密钥使用 Windows DPAPI 按当前用户加密保存
+- Windows 勾选“记住认证凭据”后，密钥或密码使用 DPAPI 按当前用户加密保存；macOS 使用系统钥匙串
 
-程序调用 `/proxy/network/integration/v1/info` 验证 API Key，并自动读取 Site UUID。多站点环境会显示站点选择窗口。
+本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后与 API Key 模式一样访问 `/proxy/network/integration/v1/...`。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。程序会自动读取 Site UUID，多站点环境会显示站点选择窗口。
 
 ## 策略变更中心
 
@@ -113,8 +113,8 @@ EXE 内部直接封装了 212 条按服务分类的转发域规则，不依赖�
 
 ## 安全
 
-- API Key 使用 Windows DPAPI 当前用户加密，设置文件中不保存明文
-- API Key 不写入策略基线、快照或操作日志
+- Windows 使用 DPAPI 当前用户加密 API Key 或本地账号密码；macOS 使用系统钥匙串，设置文件中不保存明文密钥或密码
+- API Key、用户名和密码不写入策略基线、快照或操作日志
 - 修改前自动备份；操作日志位于 `%LOCALAPPDATA%\UniFiPolicyManager\logs\operations.ndjson`
 - 系统/派生策略保持只读
 - 不使用 SSH，不访问未公开的控制器内部接口

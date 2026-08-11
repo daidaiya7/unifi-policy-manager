@@ -102,18 +102,20 @@ public partial class MainWindow : Window
 
     private async void LoginButton_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("正在验证官方 API 并读取站点…", async () =>
+        var authenticationMode = GetSelectedAuthenticationMode();
+        await RunBusyAsync(authenticationMode == AuthenticationMode.ApiKey ? "正在验证 API Key 并读取站点…" : "正在登录 UniFi Console 并读取站点…", async () =>
         {
             _client?.Dispose();
             _client = null;
             var host = HostTextBox.Text.Trim();
             var apiKey = ApiKeyInput.Password;
+            var username = UsernameTextBox.Text.Trim();
+            var password = LocalPasswordInput.Password;
             var verifyTls = VerifyTlsCheckBox.IsChecked == true;
-            var rememberApiKey = RememberApiKeyCheckBox.IsChecked == true;
-            var client = await UniFiClient.ConnectAsync(
-                host,
-                apiKey,
-                verifyTls);
+            var rememberCredential = RememberCredentialCheckBox.IsChecked == true;
+            var client = authenticationMode == AuthenticationMode.ApiKey
+                ? await UniFiClient.ConnectAsync(host, apiKey, verifyTls)
+                : await UniFiClient.ConnectWithLocalAccountAsync(host, username, password, verifyTls);
 
             UniFiSite? selectedSite;
             if (client.Sites.Count == 1)
@@ -134,8 +136,15 @@ public partial class MainWindow : Window
 
             client.SelectSite(selectedSite);
             _client = client;
-            SaveConnectionSettings(host, verifyTls, rememberApiKey, apiKey);
+            SaveConnectionSettings(
+                host,
+                verifyTls,
+                authenticationMode,
+                rememberCredential,
+                username,
+                authenticationMode == AuthenticationMode.ApiKey ? apiKey : password);
             ApiKeyInput.Clear();
+            LocalPasswordInput.Clear();
             _lastOperation = null;
             ShowWorkspace();
             await RefreshAllAsync();
@@ -149,7 +158,7 @@ public partial class MainWindow : Window
         LoginPanel.Visibility = Visibility.Collapsed;
         WorkspacePanel.Visibility = Visibility.Visible;
         ConnectionDot.Fill = new SolidColorBrush(Color.FromRgb(30, 184, 117));
-        ConnectionText.Text = _demoMode ? "模拟模式" : "官方 API";
+        ConnectionText.Text = _demoMode ? "模拟模式" : _client.AuthenticationMode == AuthenticationMode.ApiKey ? "API Key" : "本地账号";
         TargetText.Text = _demoMode ? "模拟数据（不会连接路由器）" : $"已连接 {_client.Target}";
         SiteInfoText.Text = $"Site: {_client.Site} · UUID: {_client.SiteId} · Network {_client.ApplicationVersion}";
         SidebarSiteText.Text = $"{_client.Site} · {_client.ApplicationVersion}";
@@ -178,38 +187,64 @@ public partial class MainWindow : Window
         var settings = _secureSettingsService.Load();
         HostTextBox.Text = settings.Host;
         VerifyTlsCheckBox.IsChecked = settings.VerifyTls;
-        RememberApiKeyCheckBox.IsChecked = settings.RememberApiKey;
-        ApiKeyInput.Password = settings.ApiKey;
-        ForgetApiKeyButton.IsEnabled = settings.RememberApiKey && settings.ApiKey.Length > 0;
+        AuthenticationModeComboBox.SelectedIndex = settings.AuthenticationMode == AuthenticationMode.ApiKey ? 0 : 1;
+        RememberCredentialCheckBox.IsChecked = settings.RememberCredential;
+        UsernameTextBox.Text = settings.Username;
+        ApiKeyInput.Password = settings.AuthenticationMode == AuthenticationMode.ApiKey ? settings.Secret : string.Empty;
+        LocalPasswordInput.Password = settings.AuthenticationMode == AuthenticationMode.LocalAccount ? settings.Secret : string.Empty;
+        ForgetCredentialButton.IsEnabled = settings.RememberCredential && settings.Secret.Length > 0;
+        UpdateAuthenticationPanels();
     }
 
-    private void SaveConnectionSettings(string host, bool verifyTls, bool rememberApiKey, string apiKey)
+    private void SaveConnectionSettings(
+        string host,
+        bool verifyTls,
+        AuthenticationMode authenticationMode,
+        bool rememberCredential,
+        string username,
+        string secret)
     {
         try
         {
-            _secureSettingsService.Save(host, verifyTls, rememberApiKey, apiKey);
-            ForgetApiKeyButton.IsEnabled = rememberApiKey;
+            _secureSettingsService.Save(host, verifyTls, authenticationMode, rememberCredential, username, secret);
+            ForgetCredentialButton.IsEnabled = rememberCredential;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"已连接 UCG，但保存连接信息失败：\n\n{ex.Message}", "无法保存 API Key", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, $"已连接 UCG，但保存连接信息失败：\n\n{ex.Message}", "无法保存认证凭据", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
-    private void ForgetApiKeyButton_Click(object sender, RoutedEventArgs e)
+    private void ForgetCredentialButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _secureSettingsService.ForgetApiKey(HostTextBox.Text, VerifyTlsCheckBox.IsChecked == true);
+            _secureSettingsService.ForgetCredential(HostTextBox.Text, VerifyTlsCheckBox.IsChecked == true, GetSelectedAuthenticationMode(), UsernameTextBox.Text);
             ApiKeyInput.Clear();
-            RememberApiKeyCheckBox.IsChecked = false;
-            ForgetApiKeyButton.IsEnabled = false;
-            SetStatus("已删除本机保存的 API Key。");
+            LocalPasswordInput.Clear();
+            RememberCredentialCheckBox.IsChecked = false;
+            ForgetCredentialButton.IsEnabled = false;
+            SetStatus("已删除本机保存的认证凭据。");
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "无法清除 API Key", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.Message, "无法清除认证凭据", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void AuthenticationModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateAuthenticationPanels();
+
+    private AuthenticationMode GetSelectedAuthenticationMode() =>
+        (AuthenticationModeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() == nameof(AuthenticationMode.LocalAccount)
+            ? AuthenticationMode.LocalAccount
+            : AuthenticationMode.ApiKey;
+
+    private void UpdateAuthenticationPanels()
+    {
+        if (ApiKeyLoginPanel is null || LocalAccountLoginPanel is null) return;
+        var localAccount = GetSelectedAuthenticationMode() == AuthenticationMode.LocalAccount;
+        ApiKeyLoginPanel.Visibility = localAccount ? Visibility.Collapsed : Visibility.Visible;
+        LocalAccountLoginPanel.Visibility = localAccount ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private async Task RefreshRecordsAsync()
@@ -995,7 +1030,8 @@ public partial class MainWindow : Window
     {
         var message = exception switch
         {
-            UniFiApiException api when api.StatusCode is 401 or 403 => "API Key 无效、已撤销或没有当前 Console 的访问权限。请在 unifi.ui.com → Settings → API Keys 检查。",
+            UniFiApiException api when api.Message.StartsWith("本地账号已登录", StringComparison.Ordinal) => api.Message,
+            UniFiApiException api when api.StatusCode is 401 or 403 => "认证凭据无效或没有当前 Console 的访问权限。API Key 请在 unifi.ui.com 检查；账号登录请使用 Console 本地管理员账号。",
             UniFiApiException api when api.StatusCode == 404 => "此 Console 未提供请求的官方 Integration API，或所选站点/记录不存在。",
             _ => exception.Message
         };

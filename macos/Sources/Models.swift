@@ -1,5 +1,18 @@
 import Foundation
 
+enum AuthenticationMode: String, CaseIterable, Identifiable {
+    case apiKey
+    case localAccount
+
+    var id: String { rawValue }
+    var title: String { self == .apiKey ? "API Key" : "用户名密码" }
+}
+
+enum AuthenticationCredentials {
+    case apiKey(String)
+    case localAccount(username: String, password: String)
+}
+
 struct UniFiSite: Identifiable, Codable, Hashable {
     let id: String
     let internalReference: String

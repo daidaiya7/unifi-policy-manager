@@ -6,7 +6,7 @@ Native macOS port built with SwiftUI and the official Ubiquiti Integration API.
 
 - macOS 14 or later
 - UniFi Cloud Gateway / Network application exposing the Integration API
-- API Key created in `unifi.ui.com -> Settings -> API Keys`
+- API Key created in `unifi.ui.com -> Settings -> API Keys`, or a UniFi OS local administrator account
 
 ## Included
 
@@ -14,7 +14,7 @@ Native macOS port built with SwiftUI and the official Ubiquiti Integration API.
 - DNS records: forward domain, A, AAAA, CNAME, MX, TXT and SRV CRUD
 - ACL and firewall policy list, JSON create/edit, enable/disable and delete
 - System and derived policies remain read-only
-- API Key storage in macOS Keychain
+- API Key or local-account password storage in macOS Keychain
 - Automatic full baseline snapshots before write operations
 - Manual baseline export
 - Offline demo mode
@@ -24,6 +24,18 @@ Backups and operation logs are stored in:
 ```text
 ~/Library/Application Support/UniFiPolicyManager
 ```
+
+## Authentication
+
+The connection screen supports two modes:
+
+- API Key: sends the key to the official Integration API.
+- Local account: signs in through `/api/auth/login`, keeps the UniFi OS Cookie session and CSRF token, then accesses the same Integration API endpoints.
+
+Local-account mode requires a UniFi OS local administrator. Ubiquiti cloud SSO,
+2FA and Passkey accounts are not supported. If the installed Integration API
+rejects Cookie authentication, the app reports that incompatibility instead of
+falling back to private Network application endpoints.
 
 ## Build
 

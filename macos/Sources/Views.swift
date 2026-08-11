@@ -58,7 +58,7 @@ struct LoginView: View {
                     Text("UniFi 策略管理")
                         .font(.system(size: 35, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("通过 Ubiquiti 官方 Integration API 管理 DNS、ACL 与防火墙策略。修改前自动保存完整快照。")
+                    Text("使用 API Key 或 UniFi OS 本地账号连接，通过 Integration API 管理 DNS、ACL 与防火墙策略。")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.white.opacity(0.68))
                         .lineSpacing(6)
@@ -67,11 +67,11 @@ struct LoginView: View {
                     VStack(alignment: .leading, spacing: 15) {
                         LoginFeature(icon: "checkmark.shield", text: "官方 API，不使用 SSH 或内部端点")
                         LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前自动保存恢复基线")
-                        LoginFeature(icon: "key", text: "API Key 存储在 macOS 钥匙串")
+                        LoginFeature(icon: "key", text: "认证凭据存储在 macOS 钥匙串")
                     }
                     .padding(.top, 34)
                     Spacer()
-                    Text("Native macOS · Apple Silicon")
+                    Text("Native macOS · macOS 14+")
                         .font(.caption)
                         .foregroundStyle(Color.white.opacity(0.36))
                 }
@@ -83,7 +83,7 @@ struct LoginView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("连接 UniFi Console")
                         .font(.system(size: 28, weight: .bold))
-                    Text("填写 UCG 的本地地址和官方 API Key。")
+                    Text("选择 API Key 或本地管理员账号进行连接。")
                         .foregroundStyle(.secondary)
                         .padding(.top, 7)
 
@@ -91,18 +91,32 @@ struct LoginView: View {
                         Section {
                             TextField("192.168.1.1", text: $model.host)
                                 .textFieldStyle(.roundedBorder)
-                            SecureField("UniFi API Key", text: $model.apiKey)
-                                .textFieldStyle(.roundedBorder)
+                            Picker("认证方式", selection: $model.authenticationMode) {
+                                ForEach(AuthenticationMode.allCases) { mode in Text(mode.title).tag(mode) }
+                            }
+                            .pickerStyle(.segmented)
+                            if model.authenticationMode == .apiKey {
+                                SecureField("UniFi API Key", text: $model.apiKey)
+                                    .textFieldStyle(.roundedBorder)
+                            } else {
+                                TextField("本地管理员用户名", text: $model.username)
+                                    .textFieldStyle(.roundedBorder)
+                                SecureField("本地管理员密码", text: $model.password)
+                                    .textFieldStyle(.roundedBorder)
+                                Text("仅支持 Console 本地管理员账号，不支持需要 2FA 或 Passkey 的云端 SSO。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } header: { Text("连接信息") }
 
                         Section {
-                            Toggle("将 API Key 存入 macOS 钥匙串", isOn: $model.rememberKey)
+                            Toggle("将认证凭据存入 macOS 钥匙串", isOn: $model.rememberCredential)
                             Toggle("验证 UCG HTTPS 证书", isOn: $model.verifyTLS)
                         } header: { Text("安全") }
                     }
                     .formStyle(.grouped)
                     .scrollDisabled(true)
-                    .frame(height: 260)
+                    .frame(height: model.authenticationMode == .apiKey ? 300 : 365)
                     .padding(.horizontal, -20)
                     .padding(.top, 14)
 
@@ -113,20 +127,24 @@ struct LoginView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(model.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.apiKey.isEmpty)
+                    .disabled(!model.canConnect)
 
                     HStack {
                         Button("演示模式", systemImage: "play.rectangle") { model.startDemo() }
                         Spacer()
-                        Button("清除保存的 API Key", systemImage: "key.slash") { model.forgetKey() }
-                            .disabled(KeychainService.load().isEmpty && model.apiKey.isEmpty)
+                        Button("清除保存的凭据", systemImage: "key.slash") { model.forgetCredential() }
+                            .disabled(
+                                KeychainService.load(account: KeychainService.apiKeyAccount).isEmpty &&
+                                KeychainService.load(account: KeychainService.localPasswordAccount).isEmpty &&
+                                model.apiKey.isEmpty && model.password.isEmpty
+                            )
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .padding(.top, 16)
 
                     Divider().padding(.vertical, 24)
-                    Label("自签名证书的 UCG 通常需要关闭证书验证。API Key 不会写入快照、导出文件或操作日志。", systemImage: "lock.shield")
+                    Label("自签名证书的 UCG 通常需要关闭证书验证。认证凭据不会写入快照、导出文件或操作日志。", systemImage: "lock.shield")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -170,7 +188,7 @@ struct SitePickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("选择 UniFi 站点").font(.title2.bold())
-            Text("此 API Key 可以管理多个站点。").foregroundStyle(.secondary)
+            Text("当前凭据可以管理多个站点。").foregroundStyle(.secondary)
             List(model.sites, selection: $selection) { site in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(site.displayName).fontWeight(.semibold)
@@ -319,8 +337,8 @@ struct OverviewView: View {
                         VStack(alignment: .leading, spacing: 17) {
                             SafetyRow(icon: "checkmark.shield.fill", text: "修改前自动保存完整策略基线")
                             SafetyRow(icon: "lock.fill", text: "系统与派生策略保持只读")
-                            SafetyRow(icon: "key.fill", text: "API Key 仅存储在 macOS 钥匙串")
-                            SafetyRow(icon: "doc.badge.ellipsis", text: "日志与导出文件不包含 API Key")
+                            SafetyRow(icon: "key.fill", text: "认证凭据仅存储在 macOS 钥匙串")
+                            SafetyRow(icon: "doc.badge.ellipsis", text: "日志与导出文件不包含认证凭据")
                         }.padding(10)
                     }
                     .frame(width: 340)

@@ -24,6 +24,7 @@ public sealed class DemoUniFiClient : IUniFiClient
     public string Site => DemoSite.DisplayName;
     public string SiteId => DemoSite.Id;
     public string ApplicationVersion => "10.5.67-demo";
+    public AuthenticationMode AuthenticationMode => AuthenticationMode.ApiKey;
     public IReadOnlyList<UniFiSite> Sites { get; } = [DemoSite];
 
     public DemoUniFiClient()

@@ -27,9 +27,12 @@ enum WorkspacePage: String, CaseIterable, Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var host = ConnectionPreferences.host
-    @Published var apiKey = ConnectionPreferences.rememberKey ? KeychainService.load() : ""
+    @Published var authenticationMode = ConnectionPreferences.authenticationMode
+    @Published var apiKey = ConnectionPreferences.rememberCredential ? KeychainService.load(account: KeychainService.apiKeyAccount) : ""
+    @Published var username = ConnectionPreferences.username
+    @Published var password = ConnectionPreferences.rememberCredential ? KeychainService.load(account: KeychainService.localPasswordAccount) : ""
     @Published var verifyTLS = ConnectionPreferences.verifyTLS
-    @Published var rememberKey = ConnectionPreferences.rememberKey
+    @Published var rememberCredential = ConnectionPreferences.rememberCredential
     @Published var connected = false
     @Published var demoMode = false
     @Published var busy = false
@@ -52,6 +55,12 @@ final class AppModel: ObservableObject {
     var targetLabel: String { demoMode ? "演示环境" : (api?.target ?? host) }
     var versionLabel: String { demoMode ? "Demo 10.4.57" : (api?.applicationVersion ?? "未知") }
     var totalCount: Int { dnsRecords.count + aclRules.count + firewallRules.count }
+    var canConnect: Bool {
+        guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return authenticationMode == .apiKey
+            ? !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            : !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty
+    }
 
     var filteredDNS: [DNSRecord] {
         dnsRecords.filter { record in
@@ -70,8 +79,11 @@ final class AppModel: ObservableObject {
 
     func connect() {
         Task {
-            await perform("正在验证官方 API…") {
-                let client = try UniFiAPI(host: self.host, apiKey: self.apiKey, verifyTLS: self.verifyTLS)
+            await perform(authenticationMode == .apiKey ? "正在验证 API Key…" : "正在登录 UniFi Console…") {
+                let credentials: AuthenticationCredentials = self.authenticationMode == .apiKey
+                    ? .apiKey(self.apiKey)
+                    : .localAccount(username: self.username, password: self.password)
+                let client = try UniFiAPI(host: self.host, credentials: credentials, verifyTLS: self.verifyTLS)
                 try await client.connect()
                 self.api = client
                 self.sites = client.sites
@@ -100,15 +112,29 @@ final class AppModel: ObservableObject {
         selectedSite = site
         ConnectionPreferences.host = host
         ConnectionPreferences.verifyTLS = verifyTLS
-        ConnectionPreferences.rememberKey = rememberKey
+        ConnectionPreferences.authenticationMode = authenticationMode
+        ConnectionPreferences.username = authenticationMode == .localAccount ? username.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        ConnectionPreferences.rememberCredential = rememberCredential
         do {
-            if rememberKey { try KeychainService.save(apiKey) } else { KeychainService.forget() }
+            if rememberCredential {
+                if authenticationMode == .apiKey {
+                    try KeychainService.save(apiKey, account: KeychainService.apiKeyAccount)
+                    KeychainService.forget(account: KeychainService.localPasswordAccount)
+                } else {
+                    try KeychainService.save(password, account: KeychainService.localPasswordAccount)
+                    KeychainService.forget(account: KeychainService.apiKeyAccount)
+                }
+            } else {
+                KeychainService.forget(account: KeychainService.apiKeyAccount)
+                KeychainService.forget(account: KeychainService.localPasswordAccount)
+            }
         } catch { errorMessage = error.localizedDescription }
         connected = true
         demoMode = false
         selectedPage = .overview
         await refreshAllBody()
         apiKey = ""
+        password = ""
     }
 
     func startDemo() {
@@ -133,16 +159,19 @@ final class AppModel: ObservableObject {
         firewallRules = []
         references = []
         search = ""
-        apiKey = rememberKey ? KeychainService.load() : ""
+        apiKey = rememberCredential ? KeychainService.load(account: KeychainService.apiKeyAccount) : ""
+        password = rememberCredential ? KeychainService.load(account: KeychainService.localPasswordAccount) : ""
         status = "已断开连接"
     }
 
-    func forgetKey() {
-        KeychainService.forget()
+    func forgetCredential() {
+        KeychainService.forget(account: KeychainService.apiKeyAccount)
+        KeychainService.forget(account: KeychainService.localPasswordAccount)
         apiKey = ""
-        rememberKey = false
-        ConnectionPreferences.rememberKey = false
-        status = "已从 macOS 钥匙串删除 API Key"
+        password = ""
+        rememberCredential = false
+        ConnectionPreferences.rememberCredential = false
+        status = "已从 macOS 钥匙串删除保存的认证凭据"
     }
 
     func refreshAll() { Task { await perform("正在刷新全部策略…") { await self.refreshAllBody() } } }

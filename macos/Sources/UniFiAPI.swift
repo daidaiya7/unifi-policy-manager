@@ -34,7 +34,10 @@ final class TLSDelegate: NSObject, URLSessionDelegate {
 
 final class UniFiAPI: @unchecked Sendable {
     let target: String
-    let apiKey: String
+    let authenticationMode: AuthenticationMode
+    private let apiKey: String?
+    private var localCredentials: (username: String, password: String)?
+    private var csrfToken: String?
     private let session: URLSession
     private let delegate: TLSDelegate
     private let decoder = JSONDecoder()
@@ -44,25 +47,38 @@ final class UniFiAPI: @unchecked Sendable {
     private(set) var sites: [UniFiSite] = []
     private(set) var selectedSite: UniFiSite?
 
-    init(host: String, apiKey: String, verifyTLS: Bool) throws {
+    init(host: String, credentials: AuthenticationCredentials, verifyTLS: Bool) throws {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let raw = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
         guard let url = URL(string: raw), ["http", "https"].contains(url.scheme), url.host != nil, url.path.isEmpty || url.path == "/" else {
             throw UniFiError.invalidHost
         }
-        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw UniFiError.api("请输入 UniFi API Key。")
-        }
         target = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        self.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch credentials {
+        case .apiKey(let value):
+            let trimmedKey = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedKey.isEmpty else { throw UniFiError.api("请输入 UniFi API Key。") }
+            authenticationMode = .apiKey
+            apiKey = trimmedKey
+            localCredentials = nil
+        case .localAccount(let username, let password):
+            let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedUsername.isEmpty else { throw UniFiError.api("请输入 UniFi OS 本地管理员用户名。") }
+            guard !password.isEmpty else { throw UniFiError.api("请输入 UniFi OS 本地管理员密码。") }
+            authenticationMode = .localAccount
+            apiKey = nil
+            localCredentials = (trimmedUsername, password)
+        }
         delegate = TLSDelegate(verifyTLS: verifyTLS)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30
+        configuration.httpShouldSetCookies = true
         configuration.httpAdditionalHeaders = ["User-Agent": "UniFi-Policy-Manager-macOS/1.0"]
         session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
     func connect() async throws {
+        if authenticationMode == .localAccount { try await authenticateLocalAccount() }
         let info = try await request(path: "/proxy/network/integration/v1/info")
         applicationVersion = info["applicationVersion"] as? String ?? "未知"
         sites = try await paged(path: "/proxy/network/integration/v1/sites").map { object in
@@ -72,7 +88,7 @@ final class UniFiAPI: @unchecked Sendable {
                 name: object["name"] as? String ?? ""
             )
         }.filter { !$0.id.isEmpty }
-        if sites.isEmpty { throw UniFiError.invalidResponse("API Key 可用，但没有返回可管理站点。") }
+        if sites.isEmpty { throw UniFiError.invalidResponse("认证成功，但没有返回可管理站点。") }
     }
 
     func selectSite(_ site: UniFiSite) { selectedSite = site }
@@ -156,14 +172,19 @@ final class UniFiAPI: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        if let apiKey { request.setValue(apiKey, forHTTPHeaderField: "X-API-Key") }
+        if authenticationMode == .localAccount, let csrfToken { request.setValue(csrfToken, forHTTPHeaderField: "X-CSRF-Token") }
         if let body {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw UniFiError.invalidResponse("UCG 没有返回 HTTP 响应。") }
+        captureCSRF(from: http)
         if !(200..<300).contains(http.statusCode) {
+            if authenticationMode == .localAccount, [401, 403].contains(http.statusCode) {
+                throw UniFiError.api("本地账号已登录，但此 Console 的 Integration API 不接受 Cookie 会话。请改用 API Key。程序不会回退到未公开的 Network 内部接口。")
+            }
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let message = object?["message"] as? String ?? "UniFi 请求失败（HTTP \(http.statusCode)）。"
             throw UniFiError.api(message)
@@ -172,6 +193,33 @@ final class UniFiAPI: @unchecked Sendable {
         let object = try JSONSerialization.jsonObject(with: data)
         if let dictionary = object as? [String: Any] { return dictionary }
         return [:]
+    }
+
+    private func authenticateLocalAccount() async throws {
+        guard let credentials = localCredentials else { throw UniFiError.api("本地账号凭据不可用。") }
+        defer { localCredentials = nil }
+        guard let url = URL(string: target + "/api/auth/login") else { throw UniFiError.invalidHost }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "username": credentials.username,
+            "password": credentials.password
+        ])
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw UniFiError.invalidResponse("UCG 没有返回 HTTP 响应。") }
+        captureCSRF(from: http)
+        guard (200..<300).contains(http.statusCode) else {
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let message = object?["message"] as? String ?? "用户名或密码无效。请使用 Console 中创建的本地管理员账号。"
+            throw UniFiError.api(message)
+        }
+    }
+
+    private func captureCSRF(from response: HTTPURLResponse) {
+        if let updated = response.value(forHTTPHeaderField: "X-Updated-CSRF-Token"), !updated.isEmpty { csrfToken = updated }
+        else if let value = response.value(forHTTPHeaderField: "X-CSRF-Token"), !value.isEmpty { csrfToken = value }
     }
 
     private func parseDNS(_ item: [String: Any]) -> DNSRecord {

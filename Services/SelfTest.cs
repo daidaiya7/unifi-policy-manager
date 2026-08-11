@@ -68,23 +68,37 @@ public static class SelfTest
             return Task.CompletedTask;
         });
 
-        await CheckAsync("secure_api_key_settings_roundtrip", () =>
+        await CheckAsync("secure_connection_settings_roundtrip", () =>
         {
             var directory = Path.Combine(Path.GetTempPath(), $"unifi-policy-manager-settings-{Guid.NewGuid():N}");
             try
             {
                 var service = new SecureSettingsService(directory);
-                const string secret = "self-test-api-key-value";
-                service.Save("192.0.2.1", verifyTls: true, rememberApiKey: true, apiKey: secret);
-                var loaded = service.Load();
-                if (loaded.Host != "192.0.2.1" || !loaded.VerifyTls || !loaded.RememberApiKey || loaded.ApiKey != secret)
-                    throw new Exception("Encrypted connection settings did not round-trip.");
-                if (File.ReadAllText(service.SettingsPath).Contains(secret, StringComparison.Ordinal))
+                const string apiKey = "self-test-api-key-value";
+                service.Save("192.0.2.1", verifyTls: true, AuthenticationMode.ApiKey, rememberCredential: true, username: string.Empty, secret: apiKey);
+                var apiKeySettings = service.Load();
+                if (apiKeySettings.Host != "192.0.2.1" || !apiKeySettings.VerifyTls ||
+                    apiKeySettings.AuthenticationMode != AuthenticationMode.ApiKey ||
+                    !apiKeySettings.RememberCredential || apiKeySettings.Secret != apiKey)
+                    throw new Exception("Encrypted API Key settings did not round-trip.");
+                if (File.ReadAllText(service.SettingsPath).Contains(apiKey, StringComparison.Ordinal))
                     throw new Exception("API Key was written to settings in plaintext.");
-                service.ForgetApiKey("192.0.2.1", verifyTls: true);
+
+                const string username = "local-admin";
+                const string password = "self-test-local-password";
+                service.Save("192.0.2.2", verifyTls: false, AuthenticationMode.LocalAccount, rememberCredential: true, username, password);
+                var localSettings = service.Load();
+                if (localSettings.Host != "192.0.2.2" || localSettings.VerifyTls ||
+                    localSettings.AuthenticationMode != AuthenticationMode.LocalAccount ||
+                    !localSettings.RememberCredential || localSettings.Username != username || localSettings.Secret != password)
+                    throw new Exception("Encrypted local-account settings did not round-trip.");
+                if (File.ReadAllText(service.SettingsPath).Contains(password, StringComparison.Ordinal))
+                    throw new Exception("Local-account password was written to settings in plaintext.");
+
+                service.ForgetCredential("192.0.2.2", verifyTls: false, AuthenticationMode.LocalAccount, username);
                 var forgotten = service.Load();
-                if (forgotten.RememberApiKey || forgotten.ApiKey.Length > 0)
-                    throw new Exception("Saved API Key was not removed.");
+                if (forgotten.RememberCredential || forgotten.Secret.Length > 0)
+                    throw new Exception("Saved credential was not removed.");
             }
             finally
             {
@@ -103,8 +117,9 @@ public static class SelfTest
             if (main.FindName("LoadBundledRulesButton") is null) throw new Exception("Bundled forward-domain rules button was not loaded.");
             if (main.FindName("ChangeCenterPage") is null) throw new Exception("Policy change center was not loaded.");
             if (main.FindName("ChangePlanGrid") is null) throw new Exception("Policy change plan grid was not loaded.");
-            if (main.FindName("RememberApiKeyCheckBox") is null) throw new Exception("Remember API Key checkbox was not loaded.");
-            if (main.FindName("ForgetApiKeyButton") is null) throw new Exception("Forget API Key button was not loaded.");
+            if (main.FindName("AuthenticationModeComboBox") is null) throw new Exception("Authentication mode selector was not loaded.");
+            if (main.FindName("RememberCredentialCheckBox") is null) throw new Exception("Remember credential checkbox was not loaded.");
+            if (main.FindName("ForgetCredentialButton") is null) throw new Exception("Forget credential button was not loaded.");
             main.Close();
             foreach (var record in AllRecordTypes())
             {
