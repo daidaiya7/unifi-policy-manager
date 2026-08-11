@@ -75,6 +75,45 @@ final class FeatureParityTests: XCTestCase {
         XCTAssertTrue(result.invalid.isEmpty)
     }
 
+    func testXLSXImportReadsInlineStringCells() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sheetDirectory = root.appendingPathComponent("xl/worksheets", isDirectory: true)
+        try FileManager.default.createDirectory(at: sheetDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sheet = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <sheetData>
+            <row r="1">
+              <c r="A1" t="inlineStr"><is><t>类型</t></is></c>
+              <c r="B1" t="inlineStr"><is><t>域名</t></is></c>
+              <c r="C1" t="inlineStr"><is><t>值或服务器</t></is></c>
+            </row>
+            <row r="2">
+              <c r="A2" t="inlineStr"><is><t>NS</t></is></c>
+              <c r="B2" t="inlineStr"><is><t>xlsx.example.com</t></is></c>
+              <c r="C2" t="inlineStr"><is><t>192.168.1.10</t></is></c>
+            </row>
+          </sheetData>
+        </worksheet>
+        """
+        try Data(sheet.utf8).write(to: sheetDirectory.appendingPathComponent("sheet1.xml"))
+        let archive = root.appendingPathComponent("rules.xlsx")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        process.currentDirectoryURL = root
+        process.arguments = ["-qr", archive.path, "xl"]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        let result = try DNSImportService.importFile(archive, defaultDNSServer: "192.168.1.10")
+
+        XCTAssertEqual(result.records.count, 1)
+        XCTAssertEqual(result.records.first?.key, "xlsx.example.com")
+        XCTAssertTrue(result.invalid.isEmpty)
+    }
+
     func testStrictSyncControlsDeletionPlan() {
         let current = [
             DNSRecord(id: "keep", recordType: "NS", key: "keep.example.com", value: "192.168.1.10"),
