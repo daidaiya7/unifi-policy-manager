@@ -12,7 +12,13 @@ Native macOS port built with SwiftUI and the official Ubiquiti Integration API.
 
 - Native connection and multi-site selection
 - DNS records: forward domain, A, AAAA, CNAME, MX, TXT and SRV CRUD
+- DNS batch import from TXT, CSV and XLSX with preview, validation and de-duplication
+- Bundled 212-domain forwarder preset and built-in CSV template
+- Forward-domain batch deletion
 - ACL and firewall policy list, JSON create/edit, enable/disable and delete
+- ACL and firewall user-policy ordering
+- Full policy change center with cross-platform baseline import, safe diff execution,
+  strict synchronization, snapshot recovery and ordering restoration
 - System and derived policies remain read-only
 - API Key storage in macOS Keychain
 - Automatic live DNS, ACL and firewall baseline snapshots before write operations
@@ -30,6 +36,7 @@ Backups and operation logs are stored in:
 The source is a Swift Package. Install Xcode or Apple Command Line Tools, then run:
 
 ```bash
+swift test --package-path macos
 ./macos/build-app.sh
 ```
 
@@ -45,11 +52,13 @@ Run the Swift package directly in offline demo mode with:
 swift run --package-path macos UniFiPolicyManagerMac --demo
 ```
 
-## Current scope
+## Feature scope
 
-The macOS port covers connection, policy browsing and individual CRUD workflows.
-The Windows-only policy change center, bundled 212-domain import, XLSX import and
-policy ordering workflows are not yet ported.
+The macOS and Windows editions cover the same official Integration API policy
+scope: DNS, ACL and firewall CRUD, DNS batch workflows, policy ordering and the
+complete policy change center. Features without a public Network API endpoint,
+such as NAT, policy-based routing, port forwarding, QoS and static routes, are
+intentionally not implemented on either platform.
 
 ## License
 

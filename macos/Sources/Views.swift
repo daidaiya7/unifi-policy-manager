@@ -227,6 +227,7 @@ struct WorkspaceView: View {
             Group {
                 switch model.selectedPage ?? .overview {
                 case .overview: OverviewView()
+                case .changes: PolicyChangeView()
                 case .dns: DNSView()
                 case .acl: PolicyListView(kind: .acl)
                 case .firewall: PolicyListView(kind: .firewall)
@@ -314,6 +315,8 @@ struct OverviewView: View {
                         VStack(spacing: 0) {
                             ActionRow(icon: "network", title: "管理 DNS 记录", subtitle: "新增、编辑、启停或删除官方 DNS Policy") { model.selectedPage = .dns }
                             Divider()
+                            ActionRow(icon: "arrow.triangle.2.circlepath", title: "策略变更中心", subtitle: "导入完整基线、预览差异并安全同步") { model.selectedPage = .changes }
+                            Divider()
                             ActionRow(icon: "square.and.arrow.up", title: "导出当前基线", subtitle: "保存 DNS、ACL 和防火墙完整快照") { model.exportBaseline() }
                             Divider()
                             ActionRow(icon: "folder", title: "查看自动备份", subtitle: "每次写入前重新读取生成，便于审计和手动恢复") { model.revealBackups() }
@@ -384,6 +387,8 @@ struct DNSView: View {
     @State private var editingRecord: DNSRecord?
     @State private var showingEditor = false
     @State private var deletingRecord: DNSRecord?
+    @State private var selectedForwardIDs = Set<String>()
+    @State private var confirmingBatchDelete = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -396,14 +401,37 @@ struct DNSView: View {
                 .labelsHidden()
                 .frame(width: 130)
                 SearchField(text: $model.search)
+                Button(role: .destructive) { confirmingBatchDelete = true } label: {
+                    Label("删除转发域（\(selectedForwardIDs.count)）", systemImage: "trash")
+                }
+                .disabled(selectedForwardIDs.isEmpty || !model.writeReady)
                 Button { editingRecord = nil; showingEditor = true } label: { Label("新增记录", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.writeReady)
             }
             .padding(20)
 
+            DNSBatchPanel(selectedForwardIDs: $selectedForwardIDs)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
             Divider()
             Table(model.filteredDNS) {
+                TableColumn("") { record in
+                    Group {
+                        if record.isForwardDomain {
+                            Toggle("选择", isOn: Binding(
+                                get: { selectedForwardIDs.contains(record.stableID) },
+                                set: { selected in
+                                    if selected { selectedForwardIDs.insert(record.stableID) }
+                                    else { selectedForwardIDs.remove(record.stableID) }
+                                }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                        } else { Color.clear }
+                    }
+                }.width(34)
                 TableColumn("状态") { record in StatusPill(enabled: record.enabled) }.width(70)
                 TableColumn("类型") { record in Text(record.typeLabel) }.width(90)
                 TableColumn("域名") { record in Text(record.key).fontWeight(.medium).lineLimit(1) }.width(min: 180, ideal: 260)
@@ -427,6 +455,14 @@ struct DNSView: View {
             Button("取消", role: .cancel) { deletingRecord = nil }
             Button("删除", role: .destructive) { if let record = deletingRecord { model.deleteDNS(record) }; deletingRecord = nil }
         } message: { Text("删除前会重新读取并保存 DNS、ACL 和防火墙完整实时基线。") }
+        .alert("批量删除转发域名？", isPresented: $confirmingBatchDelete) {
+            Button("取消", role: .cancel) { }
+            Button("删除 \(selectedForwardIDs.count) 条", role: .destructive) {
+                let selected = model.dnsRecords.filter { selectedForwardIDs.contains($0.stableID) && $0.isForwardDomain }
+                model.batchDeleteForwardDomains(selected)
+                selectedForwardIDs.removeAll()
+            }
+        } message: { Text("只会删除选中的转发域名。执行前会保存完整实时策略快照。") }
     }
 }
 
@@ -568,11 +604,13 @@ struct PolicyListView: View {
                 TableColumn("来源") { rule in Text(rule.originLabel).foregroundStyle(rule.canModify ? .primary : .secondary) }.width(100)
                 TableColumn("操作") { rule in
                     HStack(spacing: 4) {
+                        IconAction(symbol: "arrow.up", help: "上移") { model.movePolicy(rule, direction: -1) }.disabled(!rule.canModify || !model.writeReady)
+                        IconAction(symbol: "arrow.down", help: "下移") { model.movePolicy(rule, direction: 1) }.disabled(!rule.canModify || !model.writeReady)
                         IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: rule.enabled ? "停用" : "启用") { model.togglePolicy(rule) }.disabled(!rule.canModify || !model.writeReady)
                         IconAction(symbol: rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }.disabled(rule.canModify && !model.writeReady)
                         IconAction(symbol: "trash", help: "删除", role: .destructive) { deletingRule = rule }.disabled(!rule.canModify || !model.writeReady)
                     }
-                }.width(105)
+                }.width(155)
             }
             .alternatingRowBackgrounds(.enabled)
             .overlay { if model.filteredPolicies(kind).isEmpty { ContentUnavailableView("没有策略", systemImage: "shield.slash", description: Text("调整搜索条件或新增用户策略。")) } }

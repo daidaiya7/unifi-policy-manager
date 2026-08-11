@@ -81,13 +81,15 @@ final class UniFiAPI: @unchecked Sendable {
         try await paged(path: sitePath("dns/policies")).map(parseDNS)
     }
 
-    func createDNS(_ record: DNSRecord) async throws {
-        _ = try await request(path: sitePath("dns/policies"), method: "POST", body: try UniFiPayloadValidator.dnsPayload(record))
+    func createDNS(_ record: DNSRecord) async throws -> DNSRecord? {
+        let object = try await request(path: sitePath("dns/policies"), method: "POST", body: try UniFiPayloadValidator.dnsPayload(record))
+        return object.isEmpty ? nil : parseDNS(object)
     }
 
-    func updateDNS(_ record: DNSRecord) async throws {
+    func updateDNS(_ record: DNSRecord) async throws -> DNSRecord? {
         guard let id = record.id else { throw UniFiError.api("DNS 记录缺少 ID。") }
-        _ = try await request(path: sitePath("dns/policies/\(id)"), method: "PUT", body: try UniFiPayloadValidator.dnsPayload(record))
+        let object = try await request(path: sitePath("dns/policies/\(id)"), method: "PUT", body: try UniFiPayloadValidator.dnsPayload(record))
+        return object.isEmpty ? nil : parseDNS(object)
     }
 
     func deleteDNS(_ record: DNSRecord) async throws {
@@ -99,18 +101,64 @@ final class UniFiAPI: @unchecked Sendable {
         try await paged(path: sitePath(kind.apiPath)).map { parsePolicy($0, kind: kind) }.sorted { $0.index < $1.index }
     }
 
-    func createPolicy(_ kind: PolicyKind, json: String) async throws {
+    func createPolicy(_ kind: PolicyKind, json: String) async throws -> PolicyRule? {
         let body = try UniFiPayloadValidator.policyPayload(kind, json: json)
-        _ = try await request(path: sitePath(kind.apiPath), method: "POST", body: body)
+        let object = try await request(path: sitePath(kind.apiPath), method: "POST", body: body)
+        return object.isEmpty ? nil : parsePolicy(object, kind: kind)
     }
 
-    func updatePolicy(_ rule: PolicyRule, json: String) async throws {
+    func updatePolicy(_ rule: PolicyRule, json: String) async throws -> PolicyRule? {
         let body = try UniFiPayloadValidator.policyPayload(rule.kind, json: json)
-        _ = try await request(path: sitePath("\(rule.kind.apiPath)/\(rule.id)"), method: "PUT", body: body)
+        let object = try await request(path: sitePath("\(rule.kind.apiPath)/\(rule.id)"), method: "PUT", body: body)
+        return object.isEmpty ? nil : parsePolicy(object, kind: rule.kind)
     }
 
     func deletePolicy(_ rule: PolicyRule) async throws {
         _ = try await request(path: sitePath("\(rule.kind.apiPath)/\(rule.id)"), method: "DELETE")
+    }
+
+    func getPolicyOrdering(_ kind: PolicyKind) async throws -> PolicyOrderingSnapshot {
+        let object = try await request(path: sitePath("\(kind.apiPath)/ordering"))
+        if kind == .acl {
+            guard let ids = object["orderedAclRuleIds"] as? [String] else {
+                throw UniFiError.invalidResponse("ACL 排序响应缺少 orderedAclRuleIds。")
+            }
+            return PolicyOrderingSnapshot(kind: .acl, orderedACLRuleIDs: ids)
+        }
+        guard let ordered = object["orderedFirewallPolicyIds"] as? [String: Any],
+              let before = ordered["beforeSystemDefined"] as? [String],
+              let after = ordered["afterSystemDefined"] as? [String] else {
+            throw UniFiError.invalidResponse("防火墙排序响应格式不正确。")
+        }
+        return PolicyOrderingSnapshot(kind: .firewall, beforeSystemDefined: before, afterSystemDefined: after)
+    }
+
+    func setPolicyOrdering(_ ordering: PolicyOrderingSnapshot) async throws {
+        let body: [String: Any]
+        if ordering.kind == .acl {
+            body = ["orderedAclRuleIds": ordering.orderedACLRuleIDs]
+        } else {
+            body = ["orderedFirewallPolicyIds": [
+                "beforeSystemDefined": ordering.beforeSystemDefined,
+                "afterSystemDefined": ordering.afterSystemDefined
+            ]]
+        }
+        _ = try await request(path: sitePath("\(ordering.kind.apiPath)/ordering"), method: "PUT", body: body)
+    }
+
+    func movePolicy(_ rule: PolicyRule, direction: Int) async throws {
+        guard direction == -1 || direction == 1 else { throw UniFiError.api("排序方向无效。") }
+        var ordering = try await getPolicyOrdering(rule.kind)
+        if rule.kind == .acl {
+            try swap(rule.id, direction: direction, in: &ordering.orderedACLRuleIDs)
+        } else if ordering.beforeSystemDefined.contains(where: { $0.caseInsensitiveCompare(rule.id) == .orderedSame }) {
+            try swap(rule.id, direction: direction, in: &ordering.beforeSystemDefined)
+        } else if ordering.afterSystemDefined.contains(where: { $0.caseInsensitiveCompare(rule.id) == .orderedSame }) {
+            try swap(rule.id, direction: direction, in: &ordering.afterSystemDefined)
+        } else {
+            throw UniFiError.api("该防火墙策略不在可排序的用户策略列表中。")
+        }
+        try await setPolicyOrdering(ordering)
     }
 
     func listReferences() async -> [PolicyReference] {
@@ -217,6 +265,15 @@ final class UniFiAPI: @unchecked Sendable {
             action: kind == .acl ? (item["action"] as? String ?? "") : (actionObject?["type"] as? String ?? ""),
             origin: metadata?["origin"] as? String ?? "", description: item["description"] as? String ?? "", rawJSON: raw
         )
+    }
+
+    private func swap(_ id: String, direction: Int, in ids: inout [String]) throws {
+        guard let index = ids.firstIndex(where: { $0.caseInsensitiveCompare(id) == .orderedSame }) else {
+            throw UniFiError.api("该策略不在用户定义排序列表中。")
+        }
+        let target = index + direction
+        guard ids.indices.contains(target) else { return }
+        ids.swapAt(index, target)
     }
 
 }
