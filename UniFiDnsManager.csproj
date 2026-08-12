@@ -7,9 +7,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>UniFiDnsManager</RootNamespace>
     <AssemblyName>UniFi-Policy-Manager</AssemblyName>
-    <Version>4.1.1</Version>
-    <AssemblyVersion>4.1.1.0</AssemblyVersion>
-    <FileVersion>4.1.1.0</FileVersion>
+    <Version>4.1.4</Version>
+    <AssemblyVersion>4.1.4.0</AssemblyVersion>
+    <FileVersion>4.1.4.0</FileVersion>
     <Product>UniFi Policy Manager</Product>
     <Company>Local Utility</Company>
     <Description>Dual-auth UniFi policy manager: API Key full management and local-account Cookie read-only access</Description>

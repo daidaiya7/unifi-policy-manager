@@ -56,6 +56,28 @@ public static class SelfTest
             return Task.CompletedTask;
         });
 
+        await CheckAsync("dns_txt_identity_and_same_site_update_are_case_sensitive", () =>
+        {
+            var id = Guid.NewGuid().ToString();
+            var current = new DnsRecord { Id = id, RecordType = "TXT", Key = "_token.example.com", Value = "Token=ABC", Enabled = true };
+            var desired = current.Clone();
+            desired.Value = "Token=abc";
+            if (ImportService.IdentityKey(current) == ImportService.IdentityKey(desired))
+                throw new Exception("TXT identity collapsed case-sensitive text values.");
+
+            var bundle = new PolicyBundle
+            {
+                HasDnsSection = true,
+                HasAclSection = false,
+                HasFirewallSection = false,
+                DnsRecords = [desired]
+            };
+            var plan = PolicyChangeService.BuildPlan(bundle, "self-test.json", [current], [], [], synchronizeDeletes: false);
+            if (plan.Items.Count != 1 || plan.Items[0].Action != PolicyChangeAction.Update || plan.Items[0].CurrentId != id)
+                throw new Exception("A same-site DNS record with a changed TXT value was not matched by official UUID.");
+            return Task.CompletedTask;
+        });
+
         await CheckAsync("official_acl_and_firewall_json_validation", () =>
         {
             _ = OfficialPolicyJson.NormalizeAndValidate(OfficialPolicyKind.Acl, OfficialPolicyJson.CreateTemplate(OfficialPolicyKind.Acl));
@@ -91,6 +113,23 @@ public static class SelfTest
             if (firewall.Id != "firewall-local-1" || firewall.Index != 3 || firewall.Type != "IPV4_AND_IPV6" || firewall.Action != "ALLOW" || firewall.CanModify)
                 throw new Exception("Local Cookie firewall response mapping failed.");
             return Task.CompletedTask;
+        });
+
+        await CheckAsync("local_cookie_write_is_blocked_before_request", async () =>
+        {
+            using var client = new UniFiClient("https://192.0.2.1", AuthenticationMode.LocalAccount, null, verifyTls: false);
+            if (client.SupportsWrites) throw new Exception("Local Cookie client unexpectedly reports write capability.");
+            try
+            {
+                await client.CreateRecordAsync(new DnsRecord
+                {
+                    RecordType = "A", Key = "blocked.example.com", Value = "192.0.2.10", Enabled = true
+                });
+                throw new Exception("Local Cookie client unexpectedly allowed a DNS write.");
+            }
+            catch (UniFiApiException exception) when (exception.Message.Contains("仅 API Key", StringComparison.Ordinal))
+            {
+            }
         });
 
         await CheckAsync("secure_connection_settings_roundtrip", () =>

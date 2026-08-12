@@ -1,4 +1,4 @@
-# UniFi Policy Manager 双认证版 4.1.1
+# UniFi Policy Manager 双认证版 4.1.4
 
 [![Build](https://github.com/daidaiya7/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/daidaiya7/unifi-policy-manager/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/daidaiya7/unifi-policy-manager)](https://github.com/daidaiya7/unifi-policy-manager/releases/latest)
@@ -7,12 +7,16 @@
 UniFi Network 双认证策略管理工具。Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式：API Key 通过 Ubiquiti Integration API 提供完整管理；本地账号建立 Cookie 会话，通过 Network 本地接口只读查看。
 
 - Windows：C# / .NET 8 / WPF 完整版
-- macOS：SwiftUI 原生端口，覆盖连接、策略浏览和单项 CRUD，仍在补齐批量与变更中心功能
+- macOS：SwiftUI 原生完整版，与 Windows 版共享官方 API 功能范围和安全写入流程
 - 双认证：API Key 完整管理；或 UniFi OS 本地管理员用户名密码只读查看（不支持云端 SSO、2FA、Passkey）
 - Cookie 接口取决于 Network 版本；某个读取接口不可用时会明确标注，并提示改用 API Key，不会影响其他可用部分
 
 ## 4.x 主要变化
 
+- 4.1.4 双认证版：同步上游 Windows/macOS 完整功能；两端均支持 API Key 和本地账号登录，Cookie 模式按 Network 版本提供只读访问
+- 4.1.4：修复 macOS 内置规则区域滚动，并延续统一发布与签名流程
+- 4.1.3：强化 Windows/macOS 发布签名、打包和校验流程
+- 4.1.2：macOS 补齐策略变更中心、DNS 批量导入/删除、212 条内置规则和策略排序
 - 4.1.1：将 212 条转发域规则真正编译进 EXE，点击“载入内置规则（212）”即可直接使用
 - 4.1.0：发布包内置 212 条按服务分类的转发域 CSV，选择文件后即可预览、去重并批量新增
 - 4.0.2：改用单元格模板强制策略变更、DNS、ACL、防火墙表格的正文、复选框和操作按钮垂直居中
@@ -53,7 +57,7 @@ API Key 模式通过官方 Integration API 支持的 Policy Table 类型：
 双击：
 
 ```text
-publish-4.1.1\UniFi-Policy-Manager.exe
+UniFi-Policy-Manager.exe
 ```
 
 ### macOS
@@ -65,9 +69,9 @@ macOS 14 或更高版本可从源码构建原生 SwiftUI 应用：
 open macos/dist/UniFi-Policy-Manager.app
 ```
 
-macOS 端使用系统钥匙串保存 API Key 或本地账号密码；API Key 模式执行写入前会将完整基线保存到
-`~/Library/Application Support/UniFiPolicyManager/backups`。当前尚未移植策略变更中心、
-212 条内置规则、XLSX 导入和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
+macOS 端使用系统钥匙串保存 API Key 或本地账号密码；API Key 模式写入前会将完整实时基线保存到
+`~/Library/Application Support/UniFiPolicyManager/backups`。macOS 已包含策略变更中心、
+212 条内置规则、TXT/CSV/XLSX 批量导入、批量删除和策略排序。完整说明见 [`macos/README.md`](macos/README.md)。
 
 连接时填写：
 
@@ -131,14 +135,36 @@ EXE 内部直接封装了 212 条按服务分类的转发域规则，不依赖�
 - 系统/派生策略保持只读
 - 不使用 SSH；API Key 模式只访问公开 Integration API，本地账号模式只访问 Cookie 会话可用的 Network 本地读取接口
 
+## 一键打包与发布
+
+仓库的 GitHub Actions 分工如下：
+
+- `Windows CI` 与 `macOS CI` 只负责提交和 Pull Request 的自动编译检查。
+- 手动发布时只运行 `Package & Release`，不要分别运行两套 CI。
+
+操作步骤：
+
+1. 打开 GitHub 仓库的 `Actions` → `Package & Release` → `Run workflow`。
+2. 输入不带 `v` 的版本号，例如 `4.2.0`；创建 Release 时不能与已有 Tag/Release 重复。
+3. 根据需要选择是否标记为预发布；如果只想下载 Actions Artifacts、不创建 Release，可关闭“创建 GitHub Release”。
+4. 工作流会并行构建 Windows 与 macOS；Windows 还会运行完整自测。
+5. 两端全部成功后，自动创建 `v版本号` 的 GitHub Release，并同时上传：
+   - `UniFi-Policy-Manager-版本号-win-x64.zip`
+   - `UniFi-Policy-Manager-版本号-macOS.zip`
+   - `SHA256SUMS.txt`
+
+任一平台构建或自测失败时不会创建 Release。
+
+发布工作流默认不要求购买代码签名证书：Windows 会生成未签名 EXE，macOS 会生成启用 Hardened Runtime 的 ad-hoc 签名应用。配置证书后，工作流会自动执行 Windows Authenticode、macOS Developer ID 签名和 Apple 公证。具体配置和免费/付费选择见 [`SIGNING.md`](SIGNING.md)。
+
 ## 演示与自测
 
 ```powershell
-.\publish-4.1.1\UniFi-Policy-Manager.exe --demo
+.\publish-4.1.4\UniFi-Policy-Manager.exe --demo
 ```
 
 ```powershell
-Start-Process .\publish-4.1.1\UniFi-Policy-Manager.exe -ArgumentList '--self-test','--self-test-output=self-test.json' -Wait
+Start-Process .\publish-4.1.4\UniFi-Policy-Manager.exe -ArgumentList '--self-test','--self-test-output=self-test.json' -Wait
 ```
 
 ## 构建
@@ -152,8 +178,8 @@ Start-Process .\publish-4.1.1\UniFi-Policy-Manager.exe -ArgumentList '--self-tes
 输出：
 
 ```text
-publish-4.1.1\UniFi-Policy-Manager.exe
-UniFi-Policy-Manager-4.1.1-win-x64.zip
+publish-4.1.4\UniFi-Policy-Manager.exe
+UniFi-Policy-Manager-4.1.4-win-x64.zip
 ```
 
 也可以直接使用标准 .NET 命令：

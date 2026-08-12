@@ -15,6 +15,7 @@
 **/obj/
 **/.build/
 macos/dist/
+/dist/
 /publish*/
 /*.zip
 /TestResults/

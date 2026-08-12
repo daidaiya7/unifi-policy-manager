@@ -32,7 +32,7 @@ public sealed class UniFiClient : IUniFiClient
     private string AclRulesPath => $"{ApiRoot}/sites/{Uri.EscapeDataString(RequireSiteId())}/acl-rules";
     private string FirewallPoliciesPath => $"{ApiRoot}/sites/{Uri.EscapeDataString(RequireSiteId())}/firewall/policies";
 
-    private UniFiClient(string target, AuthenticationMode authenticationMode, string? apiKey, bool verifyTls)
+    internal UniFiClient(string target, AuthenticationMode authenticationMode, string? apiKey, bool verifyTls)
     {
         Target = NormalizeTarget(target);
         AuthenticationMode = authenticationMode;
@@ -51,7 +51,7 @@ public sealed class UniFiClient : IUniFiClient
             Timeout = TimeSpan.FromSeconds(30)
         };
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.1");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.4");
         if (authenticationMode == AuthenticationMode.ApiKey)
             _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
     }

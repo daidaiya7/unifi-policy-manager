@@ -58,7 +58,7 @@ struct LoginView: View {
                     Text("UniFi 策略管理")
                         .font(.system(size: 35, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("使用 API Key 完整管理策略，或使用 UniFi OS 本地账号 Cookie 只读查看 DNS、ACL 与防火墙。")
+                    Text("使用 API Key 通过官方 Integration API 完整管理策略，或使用 UniFi OS 本地账号 Cookie 只读查看 DNS、ACL 与防火墙。")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.white.opacity(0.68))
                         .lineSpacing(6)
@@ -67,7 +67,7 @@ struct LoginView: View {
                     VStack(alignment: .leading, spacing: 15) {
                         LoginFeature(icon: "checkmark.shield", text: "API Key 使用官方 Integration API 完整管理")
                         LoginFeature(icon: "eye", text: "本地账号 Cookie 使用 Network 会话接口只读查看")
-                        LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前自动保存恢复基线")
+                        LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前重新读取并保存完整实时基线")
                         LoginFeature(icon: "key", text: "认证凭据存储在 macOS 钥匙串")
                     }
                     .padding(.top, 34)
@@ -123,6 +123,12 @@ struct LoginView: View {
                     .frame(height: model.authenticationMode == .apiKey ? 300 : 410)
                     .padding(.horizontal, -20)
                     .padding(.top, 14)
+
+                    Text("API Key 可在本地 Console → Integrations，或 unifi.ui.com → Settings → API Keys 创建。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 14)
 
                     Button { model.connect() } label: {
                         Label("连接并读取策略", systemImage: "arrow.right.circle.fill")
@@ -243,6 +249,7 @@ struct WorkspaceView: View {
             Group {
                 switch model.selectedPage ?? .overview {
                 case .overview: OverviewView()
+                case .changes: PolicyChangeView()
                 case .dns: DNSView()
                 case .acl: PolicyListView(kind: .acl)
                 case .firewall: PolicyListView(kind: .firewall)
@@ -338,16 +345,18 @@ struct OverviewView: View {
                         VStack(spacing: 0) {
                             ActionRow(icon: "network", title: model.supportsWrites ? "管理 DNS 记录" : "查看 DNS 记录", subtitle: model.supportsWrites ? "新增、编辑、启停或删除官方 DNS Policy" : "本地账号 Cookie 只读；写入仅 API Key") { model.selectedPage = .dns }
                             Divider()
+                            ActionRow(icon: "arrow.triangle.2.circlepath", title: "策略变更中心", subtitle: "导入完整基线、预览差异并安全同步") { model.selectedPage = .changes }
+                            Divider()
                             ActionRow(icon: "square.and.arrow.up", title: "导出当前基线", subtitle: "保存 DNS、ACL 和防火墙完整快照") { model.exportBaseline() }
                             Divider()
-                            ActionRow(icon: "folder", title: "查看自动备份", subtitle: "每次写入前生成，便于审计和恢复") { model.revealBackups() }
+                            ActionRow(icon: "folder", title: "查看自动备份", subtitle: "每次写入前重新读取生成，便于审计和手动恢复") { model.revealBackups() }
                         }
                     }
                     .frame(maxWidth: .infinity)
 
                     GroupBox("写入保护") {
                         VStack(alignment: .leading, spacing: 17) {
-                            SafetyRow(icon: "checkmark.shield.fill", text: "修改前自动保存完整策略基线")
+                            SafetyRow(icon: "checkmark.shield.fill", text: "修改前重新读取并保存完整策略基线")
                             SafetyRow(icon: "lock.fill", text: "系统与派生策略保持只读")
                             SafetyRow(icon: "key.fill", text: "认证凭据仅存储在 macOS 钥匙串")
                             SafetyRow(icon: "doc.badge.ellipsis", text: "日志与导出文件不包含认证凭据")
@@ -408,6 +417,8 @@ struct DNSView: View {
     @State private var editingRecord: DNSRecord?
     @State private var showingEditor = false
     @State private var deletingRecord: DNSRecord?
+    @State private var selectedForwardIDs = Set<String>()
+    @State private var confirmingBatchDelete = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -420,14 +431,37 @@ struct DNSView: View {
                 .labelsHidden()
                 .frame(width: 130)
                 SearchField(text: $model.search)
+                Button(role: .destructive) { confirmingBatchDelete = true } label: {
+                    Label("删除转发域（\(selectedForwardIDs.count)）", systemImage: "trash")
+                }
+                .disabled(selectedForwardIDs.isEmpty || !model.canWrite)
                 Button { editingRecord = nil; showingEditor = true } label: { Label("新增记录", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!model.supportsWrites)
+                    .disabled(!model.canWrite)
             }
             .padding(20)
 
+            DNSBatchPanel(selectedForwardIDs: $selectedForwardIDs)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
             Divider()
             Table(model.filteredDNS) {
+                TableColumn("") { record in
+                    Group {
+                        if record.isForwardDomain {
+                            Toggle("选择", isOn: Binding(
+                                get: { selectedForwardIDs.contains(record.stableID) },
+                                set: { selected in
+                                    if selected { selectedForwardIDs.insert(record.stableID) }
+                                    else { selectedForwardIDs.remove(record.stableID) }
+                                }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                        } else { Color.clear }
+                    }
+                }.width(34)
                 TableColumn("状态") { record in StatusPill(enabled: record.enabled) }.width(70)
                 TableColumn("类型") { record in Text(record.typeLabel) }.width(90)
                 TableColumn("域名") { record in Text(record.key).fontWeight(.medium).lineLimit(1) }.width(min: 180, ideal: 260)
@@ -435,9 +469,9 @@ struct DNSView: View {
                 TableColumn("附加参数") { record in Text(record.extraLabel).foregroundStyle(.secondary).lineLimit(1) }.width(min: 100, ideal: 150)
                 TableColumn("操作") { record in
                     HStack(spacing: 4) {
-                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (record.enabled ? "停用" : "启用")) { model.toggleDNS(record) }.disabled(!model.supportsWrites)
-                        IconAction(symbol: "pencil", help: "仅 API Key：编辑") { editingRecord = record; showingEditor = true }.disabled(!model.supportsWrites)
-                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRecord = record }.disabled(!model.supportsWrites)
+                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (record.enabled ? "停用" : "启用")) { model.toggleDNS(record) }.disabled(!model.canWrite)
+                        IconAction(symbol: "pencil", help: "仅 API Key：编辑") { editingRecord = record; showingEditor = true }.disabled(!model.canWrite)
+                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRecord = record }.disabled(!model.canWrite)
                     }
                 }.width(105)
             }
@@ -450,7 +484,15 @@ struct DNSView: View {
         .alert("删除 DNS 记录？", isPresented: Binding(get: { deletingRecord != nil }, set: { if !$0 { deletingRecord = nil } })) {
             Button("取消", role: .cancel) { deletingRecord = nil }
             Button("删除", role: .destructive) { if let record = deletingRecord { model.deleteDNS(record) }; deletingRecord = nil }
-        } message: { Text("删除前会自动保存 DNS、ACL 和防火墙完整基线。") }
+        } message: { Text("删除前会重新读取并保存 DNS、ACL 和防火墙完整实时基线。") }
+        .alert("批量删除转发域名？", isPresented: $confirmingBatchDelete) {
+            Button("取消", role: .cancel) { }
+            Button("删除 \(selectedForwardIDs.count) 条", role: .destructive) {
+                let selected = model.dnsRecords.filter { selectedForwardIDs.contains($0.stableID) && $0.isForwardDomain }
+                model.batchDeleteForwardDomains(selected)
+                selectedForwardIDs.removeAll()
+            }
+        } message: { Text("只会删除选中的转发域名。执行前会保存完整实时策略快照。") }
     }
 }
 
@@ -490,6 +532,7 @@ private struct IconAction: View {
 }
 
 struct DNSRecordEditor: View {
+    @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var draft: DNSRecord
     @State private var localError: String?
@@ -531,7 +574,7 @@ struct DNSRecordEditor: View {
                 if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
                 Spacer()
                 Button("取消") { dismiss() }
-                Button("保存") { save() }.buttonStyle(.borderedProminent)
+                Button("保存") { save() }.buttonStyle(.borderedProminent).disabled(!model.canWrite)
             }
         }
         .padding(24)
@@ -552,12 +595,12 @@ struct DNSRecordEditor: View {
     }
 
     private func save() {
-        if draft.recordType == "SRV" {
-            guard !draft.domain.isEmpty, !draft.service.isEmpty, !draft.protocolName.isEmpty else { localError = "SRV 必须填写域名、服务和协议。"; return }
-            draft.key = "\(draft.service).\(draft.protocolName).\(draft.domain)"
-        } else if draft.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { localError = "域名不能为空。"; return }
-        guard !draft.value.isEmpty else { localError = "记录值不能为空。"; return }
-        onSave(draft); dismiss()
+        do {
+            onSave(try UniFiPayloadValidator.normalizeDNS(draft))
+            dismiss()
+        } catch {
+            localError = error.localizedDescription
+        }
     }
 }
 
@@ -581,7 +624,7 @@ struct PolicyListView: View {
                 Spacer()
                 SearchField(text: $model.search)
                 Button { editingRule = nil; showingEditor = true } label: { Label("新增策略", systemImage: "plus") }.buttonStyle(.borderedProminent)
-                    .disabled(!model.supportsWrites)
+                    .disabled(!model.canWrite)
             }.padding(20)
             Divider()
             Table(model.filteredPolicies(kind)) {
@@ -592,11 +635,13 @@ struct PolicyListView: View {
                 TableColumn("来源") { rule in Text(rule.originLabel).foregroundStyle(rule.canModify ? .primary : .secondary) }.width(100)
                 TableColumn("操作") { rule in
                     HStack(spacing: 4) {
-                        IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (rule.enabled ? "停用" : "启用")) { model.togglePolicy(rule) }.disabled(!model.supportsWrites || !rule.canModify)
-                        IconAction(symbol: model.supportsWrites && rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: model.supportsWrites && rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }
-                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRule = rule }.disabled(!model.supportsWrites || !rule.canModify)
+                        IconAction(symbol: "arrow.up", help: "仅 API Key：上移") { model.movePolicy(rule, direction: -1) }.disabled(!rule.canModify || !model.canWrite)
+                        IconAction(symbol: "arrow.down", help: "仅 API Key：下移") { model.movePolicy(rule, direction: 1) }.disabled(!rule.canModify || !model.canWrite)
+                        IconAction(symbol: rule.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (rule.enabled ? "停用" : "启用")) { model.togglePolicy(rule) }.disabled(!rule.canModify || !model.canWrite)
+                        IconAction(symbol: model.canWrite && rule.canModify ? "pencil" : "doc.text.magnifyingglass", help: model.canWrite && rule.canModify ? "编辑 JSON" : "查看 JSON") { editingRule = rule; showingEditor = true }
+                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRule = rule }.disabled(!rule.canModify || !model.canWrite)
                     }
-                }.width(105)
+                }.width(155)
             }
             .alternatingRowBackgrounds(.enabled)
             .overlay { if model.filteredPolicies(kind).isEmpty { ContentUnavailableView("没有策略", systemImage: "shield.slash", description: Text("调整搜索条件或新增用户策略。")) } }
@@ -605,7 +650,7 @@ struct PolicyListView: View {
         .alert("删除策略？", isPresented: Binding(get: { deletingRule != nil }, set: { if !$0 { deletingRule = nil } })) {
             Button("取消", role: .cancel) { deletingRule = nil }
             Button("删除", role: .destructive) { if let rule = deletingRule { model.deletePolicy(rule) }; deletingRule = nil }
-        } message: { Text("删除前会自动保存完整策略基线。系统与派生策略不能删除。") }
+        } message: { Text("删除前会重新读取并保存完整实时策略基线。系统与派生策略不能删除。") }
     }
 }
 
@@ -644,7 +689,7 @@ struct PolicyJSONEditor: View {
                     if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
                     Spacer()
                     Button("关闭") { dismiss() }
-                    if model.supportsWrites && rule?.canModify != false { Button("验证并保存") { save() }.buttonStyle(.borderedProminent) }
+                    if rule?.canModify != false { Button("验证并保存") { save() }.buttonStyle(.borderedProminent).disabled(!model.canWrite) }
                 }
             }
             .padding(22)
@@ -680,11 +725,11 @@ struct PolicyJSONEditor: View {
 
     private func save() {
         do {
-            guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any], object["name"] is String, object["enabled"] is Bool else {
-                localError = "必须是包含 name 和 enabled 的 JSON 对象。"; return
-            }
-            onSave(json); dismiss()
-        } catch { localError = "JSON 格式错误：\(error.localizedDescription)" }
+            let object = try UniFiPayloadValidator.policyPayload(kind, json: json)
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            onSave(String(decoding: data, as: UTF8.self))
+            dismiss()
+        } catch { localError = error.localizedDescription }
     }
 
     private static func template(_ kind: PolicyKind) -> String {

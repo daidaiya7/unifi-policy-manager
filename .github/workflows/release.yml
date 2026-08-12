@@ -1,0 +1,339 @@
+name: Package & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不带 v，例如 4.2.0；不能与现有 Release 重复）"
+        required: true
+        type: string
+      prerelease:
+        description: "标记为预发布版本"
+        required: true
+        default: false
+        type: boolean
+      publish_release:
+        description: "构建成功后创建 GitHub Release；关闭时只生成 Actions Artifacts"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Validate version and tag
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_INPUT: ${{ inputs.version }}
+          RELEASE_REF: ${{ github.ref }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          if [[ "$RELEASE_REF" != "refs/heads/main" ]]; then
+            echo "::error::Package & Release must be run from the main branch."
+            exit 1
+          fi
+
+          version="${VERSION_INPUT#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must use X.Y.Z format, for example 4.2.0."
+            exit 1
+          fi
+
+          tag="v$version"
+          if [[ "$PUBLISH_RELEASE" == "true" ]] && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists. Choose a new version."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Package Windows
+    needs: validate
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore UniFiDnsManager.csproj --runtime win-x64
+
+      - name: Publish self-contained Windows build
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          dotnet publish UniFiDnsManager.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --no-restore `
+            -p:Version=$env:RELEASE_VERSION `
+            -p:AssemblyVersion="${env:RELEASE_VERSION}.0" `
+            -p:FileVersion="${env:RELEASE_VERSION}.0" `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            -p:PublishTrimmed=false `
+            --output dist/win-x64
+
+      - name: Run Windows self-test
+        shell: pwsh
+        run: |
+          $output = Join-Path $PWD "dist/self-test.json"
+          $process = Start-Process `
+            -FilePath "dist/win-x64/UniFi-Policy-Manager.exe" `
+            -ArgumentList @("--self-test", "--self-test-output=$output") `
+            -Wait -PassThru
+          Get-Content -LiteralPath $output
+          if ($process.ExitCode -ne 0) { throw "Windows self-test failed." }
+
+      - name: Sign Windows executable
+        if: ${{ env.WINDOWS_CERTIFICATE_PFX_BASE64 != '' }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD is required when a Windows certificate is configured."
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
+          [IO.File]::WriteAllBytes(
+            $certificatePath,
+            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64)
+          )
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate `
+            -FilePath $certificatePath `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $securePassword | `
+            Where-Object HasPrivateKey | `
+            Select-Object -First 1
+          if (-not $certificate) {
+            throw "The configured Windows certificate does not contain an accessible private key."
+          }
+
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+            -Recurse -Filter signtool.exe | `
+            Where-Object FullName -Match '\\x64\\signtool\.exe$' | `
+            Sort-Object FullName -Descending | `
+            Select-Object -First 1
+          if (-not $signTool) { throw "signtool.exe was not found on the runner." }
+
+          & $signTool.FullName sign `
+            /fd SHA256 `
+            /td SHA256 `
+            /tr http://timestamp.digicert.com `
+            /sha1 $certificate.Thumbprint `
+            "dist/win-x64/UniFi-Policy-Manager.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed." }
+
+          & $signTool.FullName verify /pa /v "dist/win-x64/UniFi-Policy-Manager.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed." }
+
+      - name: Report unsigned Windows build
+        if: ${{ env.WINDOWS_CERTIFICATE_PFX_BASE64 == '' }}
+        shell: pwsh
+        run: Write-Host "::notice::No Authenticode certificate is configured; the Windows package will be unsigned."
+
+      - name: Create Windows ZIP
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $packageDirectory = "dist/package-windows"
+          New-Item -ItemType Directory -Path $packageDirectory | Out-Null
+          Copy-Item -LiteralPath "dist/win-x64/UniFi-Policy-Manager.exe", "README.md", "LICENSE" -Destination $packageDirectory
+          Compress-Archive `
+            -Path "$packageDirectory/*" `
+            -DestinationPath "dist/UniFi-Policy-Manager-$env:RELEASE_VERSION-win-x64.zip" `
+            -CompressionLevel Optimal
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-windows
+          path: dist/UniFi-Policy-Manager-${{ needs.validate.outputs.version }}-win-x64.zip
+          if-no-files-found: error
+
+  macos:
+    name: Package macOS
+    needs: validate
+    runs-on: macos-14
+    env:
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run macOS tests
+        run: swift test --package-path macos
+
+      - name: Set application version
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" macos/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" macos/Info.plist
+
+      - name: Install Developer ID certificate
+        if: ${{ env.APPLE_CERTIFICATE_P12_BASE64 != '' }}
+        shell: bash
+        run: |
+          if [[ -z "$APPLE_CERTIFICATE_PASSWORD" || -z "$APPLE_SIGNING_IDENTITY" ]]; then
+            echo "::error::APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY are required when an Apple certificate is configured."
+            exit 1
+          fi
+
+          certificate_path="$RUNNER_TEMP/developer-id-application.p12"
+          keychain_path="$RUNNER_TEMP/app-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          echo -n "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode -o "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+      - name: Build application bundle
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+        run: ./macos/build-app.sh
+
+      - name: Verify application signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 macos/dist/UniFi-Policy-Manager.app
+          codesign --display --verbose=4 macos/dist/UniFi-Policy-Manager.app
+
+      - name: Report ad-hoc macOS build
+        if: ${{ env.APPLE_CERTIFICATE_P12_BASE64 == '' }}
+        run: echo "::notice::No Developer ID certificate is configured; the macOS package uses an ad-hoc signature with Hardened Runtime."
+
+      - name: Create notarization upload
+        if: ${{ env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_ID != '' && env.APPLE_TEAM_ID != '' && env.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          macos/dist/UniFi-Policy-Manager.app
+          macos/dist/notarization-upload.zip
+
+      - name: Notarize and staple macOS application
+        if: ${{ env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_ID != '' && env.APPLE_TEAM_ID != '' && env.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        shell: bash
+        run: |
+          xcrun notarytool submit macos/dist/notarization-upload.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+          xcrun stapler staple macos/dist/UniFi-Policy-Manager.app
+          xcrun stapler validate macos/dist/UniFi-Policy-Manager.app
+          spctl --assess --type execute --verbose=4 macos/dist/UniFi-Policy-Manager.app
+
+      - name: Report signed but unnotarized macOS build
+        if: ${{ env.APPLE_CERTIFICATE_P12_BASE64 != '' && (env.APPLE_ID == '' || env.APPLE_TEAM_ID == '' || env.APPLE_APP_SPECIFIC_PASSWORD == '') }}
+        run: echo "::warning::The app is Developer ID signed, but notarization credentials are incomplete; the package will not be notarized."
+
+      - name: Create macOS ZIP
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          macos/dist/UniFi-Policy-Manager.app
+          macos/dist/UniFi-Policy-Manager-$RELEASE_VERSION-macOS.zip
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-macos
+          path: macos/dist/UniFi-Policy-Manager-${{ needs.validate.outputs.version }}-macOS.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [validate, windows, macos]
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download Windows package
+        uses: actions/download-artifact@v7
+        with:
+          name: release-windows
+          path: dist
+
+      - name: Download macOS package
+        uses: actions/download-artifact@v7
+        with:
+          name: release-macos
+          path: dist
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Attest release packages
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          options=(
+            "$RELEASE_TAG"
+            dist/*.zip
+            dist/SHA256SUMS.txt
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "UniFi Policy Manager $RELEASE_VERSION"
+            --generate-notes
+          )
+          if [[ "$PRERELEASE" == "true" ]]; then
+            options+=(--prerelease)
+          else
+            options+=(--latest)
+          fi
+          gh release create "${options[@]}"

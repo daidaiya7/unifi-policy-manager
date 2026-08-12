@@ -2,9 +2,9 @@
 
 ## Credentials
 
-Never include a real UniFi API Key in an issue, screenshot, log, baseline, test fixture, pull request, or commit.
+Never include a real UniFi API Key, local-account username, or password in an issue, screenshot, log, baseline, test fixture, pull request, or commit.
 
-The application stores a remembered API Key with Windows DPAPI for the current Windows user. Local settings, backups, operation logs, build outputs, and environment files are excluded from Git by default.
+The application stores a remembered API Key or local-account password with Windows DPAPI for the current Windows user; macOS uses Keychain. Local settings, backups, operation logs, build outputs, and environment files are excluded from Git by default.
 
 ## Reporting a vulnerability
 

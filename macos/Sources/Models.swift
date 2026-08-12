@@ -28,6 +28,25 @@ enum PolicyKind: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String { self == .acl ? "ACL" : "防火墙" }
     var apiPath: String { self == .acl ? "acl-rules" : "firewall/policies" }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Int.self) {
+            self = number == 0 ? .acl : .firewall
+            return
+        }
+        let value = try container.decode(String.self).lowercased()
+        switch value {
+        case "acl": self = .acl
+        case "firewall": self = .firewall
+        default: throw DecodingError.dataCorruptedError(in: container, debugDescription: "未知策略类型：\(value)")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(self == .acl ? "Acl" : "Firewall")
+    }
 }
 
 struct DNSRecord: Identifiable, Codable, Hashable {
@@ -64,13 +83,56 @@ struct DNSRecord: Identifiable, Codable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id
+        case id = "_id"
+        case legacyID = "id"
         case recordType = "record_type"
         case key, value, enabled, ttl, priority, weight, port, service, domain
         case protocolName = "protocol"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+            ?? container.decodeIfPresent(String.self, forKey: .legacyID)
+        recordType = try container.decodeIfPresent(String.self, forKey: .recordType) ?? "NS"
+        key = try container.decodeIfPresent(String.self, forKey: .key) ?? ""
+        value = try container.decodeIfPresent(String.self, forKey: .value) ?? ""
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        ttl = try container.decodeIfPresent(Int.self, forKey: .ttl)
+        priority = try container.decodeIfPresent(Int.self, forKey: .priority)
+        weight = try container.decodeIfPresent(Int.self, forKey: .weight)
+        port = try container.decodeIfPresent(Int.self, forKey: .port)
+        service = try container.decodeIfPresent(String.self, forKey: .service) ?? ""
+        protocolName = try container.decodeIfPresent(String.self, forKey: .protocolName) ?? ""
+        domain = try container.decodeIfPresent(String.self, forKey: .domain) ?? ""
+        if recordType == "SRV", domain.isEmpty {
+            let parts = key.split(separator: ".", omittingEmptySubsequences: true).map(String.init)
+            if parts.count >= 3, parts[0].hasPrefix("_"), parts[1].hasPrefix("_") {
+                service = parts[0]
+                protocolName = parts[1]
+                domain = parts.dropFirst(2).joined(separator: ".")
+            }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encode(recordType, forKey: .recordType)
+        try container.encode(key, forKey: .key)
+        try container.encode(value, forKey: .value)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encodeIfPresent(ttl, forKey: .ttl)
+        try container.encodeIfPresent(priority, forKey: .priority)
+        try container.encodeIfPresent(weight, forKey: .weight)
+        try container.encodeIfPresent(port, forKey: .port)
+        try container.encode(service, forKey: .service)
+        try container.encode(protocolName, forKey: .protocolName)
+        try container.encode(domain, forKey: .domain)
+    }
+
     var stableID: String { id ?? "\(recordType)|\(key)|\(value)" }
+    var isForwardDomain: Bool { recordType == "NS" }
     var typeLabel: String { recordType == "NS" ? "转发域名" : recordType }
     var stateLabel: String { enabled ? "已启用" : "已停用" }
     var extraLabel: String {
@@ -80,6 +142,20 @@ struct DNSRecord: Identifiable, Codable, Hashable {
         case "SRV": return "端口 \(port ?? 0) · 优先级 \(priority ?? 0) · 权重 \(weight ?? 0)"
         default: return ""
         }
+    }
+}
+
+struct PolicyOrderingSnapshot: Codable, Hashable {
+    var kind: PolicyKind
+    var orderedACLRuleIDs: [String] = []
+    var beforeSystemDefined: [String] = []
+    var afterSystemDefined: [String] = []
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case orderedACLRuleIDs = "ordered_acl_rule_ids"
+        case beforeSystemDefined = "before_system_defined"
+        case afterSystemDefined = "after_system_defined"
     }
 }
 
@@ -124,15 +200,20 @@ struct PolicyReference: Identifiable, Hashable {
 }
 
 struct PolicyBundle: Codable {
-    let schemaVersion: Int
-    let createdAt: Date
-    let target: String
-    let site: String
-    let siteID: String
-    let networkVersion: String
-    let dnsRecords: [DNSRecord]
-    let aclRules: [JSONValue]
-    let firewallPolicies: [JSONValue]
+    var schemaVersion: Int = 2
+    var createdAt: Date = Date()
+    var target: String = ""
+    var site: String = ""
+    var siteID: String = ""
+    var networkVersion: String = ""
+    var dnsRecords: [DNSRecord] = []
+    var aclRules: [JSONValue] = []
+    var firewallPolicies: [JSONValue] = []
+    var aclOrdering: PolicyOrderingSnapshot?
+    var firewallOrdering: PolicyOrderingSnapshot?
+    var hasDNSSection = true
+    var hasACLSection = true
+    var hasFirewallSection = true
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -143,6 +224,63 @@ struct PolicyBundle: Codable {
         case dnsRecords = "dns_records"
         case aclRules = "acl_rules"
         case firewallPolicies = "firewall_policies"
+        case aclOrdering = "acl_ordering"
+        case firewallOrdering = "firewall_ordering"
+        case legacyRecords = "records"
+    }
+
+    init(
+        schemaVersion: Int = 2, createdAt: Date = Date(), target: String = "", site: String = "",
+        siteID: String = "", networkVersion: String = "", dnsRecords: [DNSRecord] = [],
+        aclRules: [JSONValue] = [], firewallPolicies: [JSONValue] = [],
+        aclOrdering: PolicyOrderingSnapshot? = nil, firewallOrdering: PolicyOrderingSnapshot? = nil
+    ) {
+        self.schemaVersion = schemaVersion
+        self.createdAt = createdAt
+        self.target = target
+        self.site = site
+        self.siteID = siteID
+        self.networkVersion = networkVersion
+        self.dnsRecords = dnsRecords
+        self.aclRules = aclRules
+        self.firewallPolicies = firewallPolicies
+        self.aclOrdering = aclOrdering
+        self.firewallOrdering = firewallOrdering
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        target = try container.decodeIfPresent(String.self, forKey: .target) ?? ""
+        site = try container.decodeIfPresent(String.self, forKey: .site) ?? ""
+        siteID = try container.decodeIfPresent(String.self, forKey: .siteID) ?? ""
+        networkVersion = try container.decodeIfPresent(String.self, forKey: .networkVersion) ?? ""
+        hasDNSSection = container.contains(.dnsRecords) || container.contains(.legacyRecords)
+        hasACLSection = container.contains(.aclRules)
+        hasFirewallSection = container.contains(.firewallPolicies)
+        dnsRecords = try container.decodeIfPresent([DNSRecord].self, forKey: .dnsRecords)
+            ?? container.decodeIfPresent([DNSRecord].self, forKey: .legacyRecords)
+            ?? []
+        aclRules = try container.decodeIfPresent([JSONValue].self, forKey: .aclRules) ?? []
+        firewallPolicies = try container.decodeIfPresent([JSONValue].self, forKey: .firewallPolicies) ?? []
+        aclOrdering = try container.decodeIfPresent(PolicyOrderingSnapshot.self, forKey: .aclOrdering)
+        firewallOrdering = try container.decodeIfPresent(PolicyOrderingSnapshot.self, forKey: .firewallOrdering)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(target, forKey: .target)
+        try container.encode(site, forKey: .site)
+        try container.encode(siteID, forKey: .siteID)
+        try container.encode(networkVersion, forKey: .networkVersion)
+        try container.encode(dnsRecords, forKey: .dnsRecords)
+        try container.encode(aclRules, forKey: .aclRules)
+        try container.encode(firewallPolicies, forKey: .firewallPolicies)
+        try container.encodeIfPresent(aclOrdering, forKey: .aclOrdering)
+        try container.encodeIfPresent(firewallOrdering, forKey: .firewallOrdering)
     }
 }
 
@@ -181,6 +319,17 @@ extension JSONValue {
         case let value as [String: Any]: return .object(value.mapValues(JSONValue.from))
         case let value as [Any]: return .array(value.map(JSONValue.from))
         default: return .null
+        }
+    }
+
+    var foundationValue: Any {
+        switch self {
+        case .string(let value): return value
+        case .number(let value): return value
+        case .bool(let value): return value
+        case .object(let value): return value.mapValues(\.foundationValue)
+        case .array(let value): return value.map(\.foundationValue)
+        case .null: return NSNull()
         }
     }
 }
