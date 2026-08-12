@@ -2,6 +2,8 @@
 
 Native macOS dual-authentication port. API Key mode provides full management through the official Ubiquiti Integration API; UniFi OS local-account Cookie mode provides read-only access through local Network session endpoints.
 
+> **Important:** Dual authentication does not mean both modes can write. Local-account Cookie mode only performs section-by-section reads. It cannot batch-write DNS or create, update, enable, disable, delete, or reorder ACL/firewall policies. Those operations and policy-change execution require API Key mode.
+
 ## Requirements
 
 - macOS 14 or later
@@ -35,6 +37,8 @@ The connection screen supports two modes:
 
 - API Key: sends the key to the official Integration API and enables all write controls.
 - Local account: signs in through `/api/auth/login`, keeps the UniFi OS Cookie session and reads from local Network session endpoints. Write, delete, toggle and ordering controls are marked as API-Key-only and disabled.
+
+In particular, DNS batch writes and every ACL/firewall write operation are unavailable in local-account mode. Importing, previewing, searching and exporting successfully read data remain available, but applying changes requires an API Key.
 
 Local-account mode requires a UniFi OS local administrator. Ubiquiti cloud SSO,
 2FA and Passkey accounts are not supported. Local session endpoint availability

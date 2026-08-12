@@ -6,6 +6,8 @@
 
 UniFi Network 双认证策略管理工具。Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式：API Key 通过 Ubiquiti Integration API 提供完整管理；本地账号建立 Cookie 会话，通过 Network 本地接口只读查看。
 
+> **重要：双认证不代表两种登录方式都能写入。** 本地账号 Cookie 模式只提供智能分项读取，不能批量写入 DNS，也不能新增、修改、启停、删除或排序 ACL/防火墙策略；这些操作以及策略变更中心的正式执行都必须使用 API Key。Cookie 模式可读取的 DNS、ACL、防火墙项目还取决于当前 UniFi Network 版本，某项不可用时软件会保留其他成功读取的内容，并提示该项改用 API Key。
+
 - Windows：C# / .NET 8 / WPF 完整版
 - macOS：SwiftUI 原生完整版，与 Windows 版共享官方 API 功能范围和安全写入流程
 - 双认证：API Key 完整管理；或 UniFi OS 本地管理员用户名密码只读查看（不支持云端 SSO、2FA、Passkey）
@@ -46,8 +48,9 @@ API Key 模式通过官方 Integration API 支持的 Policy Table 类型：
 | --- | --- | --- |
 | 登录与多站点选择 | 支持 | 支持 |
 | DNS、ACL、防火墙读取 | 支持 | 支持；取决于 Network 版本提供的本地接口 |
-| 新增、编辑、启停、删除 | 支持 | 不支持，界面标注“仅 API Key”并禁用 |
-| 策略排序、批量写入、策略变更中心 | 支持 | 不支持，界面标注“仅 API Key”并禁用 |
+| DNS 单项及批量写入 | 支持 | **不支持，仅 API Key** |
+| ACL/防火墙新增、编辑、启停、删除 | 支持 | **不支持，仅 API Key** |
+| 策略排序、策略变更中心正式执行 | 支持 | **不支持，仅 API Key** |
 | 导出当前已读取基线 | 支持 | 支持 |
 
 ## 直接使用
@@ -80,7 +83,7 @@ macOS 端使用系统钥匙串保存 API Key 或本地账号密码；API Key 模
 - UCG 使用自签名证书时不要勾选“验证 HTTPS 证书”
 - Windows 勾选“记住认证凭据”后，密钥或密码使用 DPAPI 按当前用户加密保存；macOS 使用系统钥匙串
 
-本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后从 Network 本地会话接口读取站点、DNS、ACL 和防火墙数据；它不会再尝试用 Cookie 访问只接受 `X-API-Key` 的 `/proxy/network/integration/v1/...`。本地账号模式为只读，具体可读取的部分取决于已安装的 Network 版本；某一项返回不可用时，程序保留其他成功读取的内容，并标注该项可改用 API Key。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。
+本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后从 Network 本地会话接口智能分项读取站点、DNS、ACL 和防火墙数据；它不会再尝试用 Cookie 访问只接受 `X-API-Key` 的 `/proxy/network/integration/v1/...`。本地账号模式为只读，不能批量写入 DNS，也不能写入 ACL 或防火墙。具体可读取的部分取决于已安装的 Network 版本；某一项返回不可用时，程序保留其他成功读取的内容，并标注该项可改用 API Key。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。
 
 ## 策略变更中心
 
