@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Version = "4.1.4"
+$Version = "4.1.5"
 $PublishDirectory = Join-Path $ProjectRoot "publish-$Version"
 
 if (-not $DotNet) {

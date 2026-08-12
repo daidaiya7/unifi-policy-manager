@@ -16,6 +16,7 @@ public interface IUniFiClient : IDisposable
     string ApplicationVersion { get; }
     AuthenticationMode AuthenticationMode { get; }
     bool SupportsWrites { get; }
+    bool SupportsDnsWrites { get; }
     string CapabilityNotice { get; }
     IReadOnlyList<UniFiSite> Sites { get; }
     void SelectSite(UniFiSite site);

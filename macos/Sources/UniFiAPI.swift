@@ -36,7 +36,13 @@ final class UniFiAPI: @unchecked Sendable {
     let target: String
     let authenticationMode: AuthenticationMode
     var supportsWrites: Bool { authenticationMode == .apiKey }
-    var capabilityNotice: String { supportsWrites ? "API Key 模式：支持读取和写入。" : "本地账号 Cookie 模式：支持读取；写入仅 API Key 可用。" }
+    private(set) var supportsDNSWrites = true
+    var capabilityNotice: String {
+        if supportsWrites { return "API Key 模式：支持完整读取和写入。" }
+        return supportsDNSWrites
+            ? "本地账号 Cookie 模式：DNS 支持读写；ACL、防火墙、排序和策略变更中心仅 API Key 可用。"
+            : "本地账号 Cookie 模式：当前 Network 版本只支持读取；完整写入请使用 API Key。"
+    }
     private let apiKey: String?
     private var localCredentials: (username: String, password: String)?
     private var csrfToken: String?
@@ -75,7 +81,7 @@ final class UniFiAPI: @unchecked Sendable {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30
         configuration.httpShouldSetCookies = true
-        configuration.httpAdditionalHeaders = ["User-Agent": "UniFi-Policy-Manager-macOS/1.0"]
+        configuration.httpAdditionalHeaders = ["User-Agent": "UniFi-Policy-Manager-macOS/4.1.5"]
         session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
@@ -116,12 +122,28 @@ final class UniFiAPI: @unchecked Sendable {
     }
 
     func createDNS(_ record: DNSRecord) async throws -> DNSRecord? {
+        if authenticationMode == .localAccount {
+            try requireDNSWrites()
+            do {
+                let object = try await request(path: localSitePath("static-dns"), method: "POST", body: try localDNSPayload(record))
+                return object.isEmpty ? try UniFiPayloadValidator.normalizeDNS(record) : parseLocalDNSMutation(object)
+            } catch { throw translateLocalDNSWriteError(error) }
+        }
         try requireWrites()
         let object = try await request(path: sitePath("dns/policies"), method: "POST", body: try UniFiPayloadValidator.dnsPayload(record))
         return object.isEmpty ? nil : parseDNS(object)
     }
 
     func updateDNS(_ record: DNSRecord) async throws -> DNSRecord? {
+        if authenticationMode == .localAccount {
+            try requireDNSWrites()
+            guard let id = record.id, !id.isEmpty else { throw UniFiError.api("DNS 记录缺少 ID。") }
+            do {
+                let object = try await request(path: localSitePath("static-dns/\(id)"), method: "PUT", body: try localDNSPayload(record, id: id))
+                if object.isEmpty { var updated = try UniFiPayloadValidator.normalizeDNS(record); updated.id = id; return updated }
+                return parseLocalDNSMutation(object)
+            } catch { throw translateLocalDNSWriteError(error) }
+        }
         try requireWrites()
         guard let id = record.id else { throw UniFiError.api("DNS 记录缺少 ID。") }
         let object = try await request(path: sitePath("dns/policies/\(id)"), method: "PUT", body: try UniFiPayloadValidator.dnsPayload(record))
@@ -129,6 +151,13 @@ final class UniFiAPI: @unchecked Sendable {
     }
 
     func deleteDNS(_ record: DNSRecord) async throws {
+        if authenticationMode == .localAccount {
+            try requireDNSWrites()
+            guard let id = record.id, !id.isEmpty else { throw UniFiError.api("DNS 记录缺少 ID。") }
+            do { _ = try await request(path: localSitePath("static-dns/\(id)"), method: "DELETE") }
+            catch { throw translateLocalDNSWriteError(error) }
+            return
+        }
         try requireWrites()
         guard let id = record.id else { throw UniFiError.api("DNS 记录缺少 ID。") }
         _ = try await request(path: sitePath("dns/policies/\(id)"), method: "DELETE")
@@ -240,6 +269,44 @@ final class UniFiAPI: @unchecked Sendable {
         if !supportsWrites { throw UniFiError.api("当前使用本地账号 Cookie 模式，只支持读取。此写入操作仅 API Key 模式可用。") }
     }
 
+    private func requireDNSWrites() throws {
+        if !supportsDNSWrites { throw UniFiError.api("当前 Network 版本不支持本地账号 Cookie DNS 写入；请改用 API Key。") }
+    }
+
+    private func localDNSPayload(_ source: DNSRecord, id: String? = nil) throws -> [String: Any] {
+        let record = try UniFiPayloadValidator.normalizeDNS(source)
+        var payload: [String: Any] = [
+            "enabled": record.enabled, "key": record.key,
+            "record_type": record.recordType, "value": record.value
+        ]
+        if let id { payload["_id"] = id }
+        switch record.recordType {
+        case "A", "AAAA", "CNAME": payload["ttl"] = record.ttl ?? 0
+        case "MX": payload["priority"] = record.priority ?? 0
+        case "SRV":
+            payload["priority"] = record.priority ?? 0
+            payload["weight"] = record.weight ?? 0
+            payload["port"] = record.port ?? 0
+        default: break
+        }
+        return payload
+    }
+
+    private func parseLocalDNSMutation(_ object: [String: Any]) -> DNSRecord {
+        if let data = object["data"] as? [String: Any] { return parseLocalDNS(data) }
+        if let data = object["data"] as? [[String: Any]], let first = data.first { return parseLocalDNS(first) }
+        return parseLocalDNS(object)
+    }
+
+    private func translateLocalDNSWriteError(_ error: Error) -> Error {
+        let message = error.localizedDescription
+        if message.contains("HTTP 403") || message.contains("HTTP 404") || message.contains("HTTP 405") {
+            supportsDNSWrites = false
+            return UniFiError.api("当前 Network 版本的 Cookie DNS 写入接口不可用；DNS 读取仍可继续，写入请改用 API Key。")
+        }
+        return error
+    }
+
     private func paged(path: String) async throws -> [[String: Any]] {
         var output: [[String: Any]] = []
         var offset = 0
@@ -284,7 +351,8 @@ final class UniFiAPI: @unchecked Sendable {
         captureCSRF(from: http)
         if !(200..<300).contains(http.statusCode) {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            var message = object?["message"] as? String ?? "UniFi 请求失败（HTTP \(http.statusCode)）。"
+            var message = object?["message"] as? String ?? "UniFi 请求失败。"
+            if !message.contains("HTTP \(http.statusCode)") { message += "（HTTP \(http.statusCode)）" }
             if let code = object?["code"] as? String, !code.isEmpty { message += " [\(code)]" }
             if let requestID = object?["requestId"] as? String, !requestID.isEmpty { message += "；Request ID: \(requestID)" }
             if object == nil, !data.isEmpty { message += " 控制器返回了非 JSON 错误页面，请确认填写的是 Console 根地址。" }

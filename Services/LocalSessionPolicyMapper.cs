@@ -6,6 +6,36 @@ namespace UniFiDnsManager.Services;
 
 internal static class LocalSessionPolicyMapper
 {
+    public static Dictionary<string, object?> BuildDnsPayload(DnsRecord input, string? id = null)
+    {
+        var record = DnsValidator.Normalize(input);
+        var payload = new Dictionary<string, object?>
+        {
+            ["enabled"] = record.Enabled,
+            ["key"] = record.Key,
+            ["record_type"] = record.RecordType,
+            ["value"] = record.Value
+        };
+        if (!string.IsNullOrWhiteSpace(id)) payload["_id"] = id;
+        switch (record.RecordType)
+        {
+            case "A":
+            case "AAAA":
+            case "CNAME":
+                payload["ttl"] = record.Ttl.GetValueOrDefault();
+                break;
+            case "MX":
+                payload["priority"] = record.Priority.GetValueOrDefault();
+                break;
+            case "SRV":
+                payload["priority"] = record.Priority.GetValueOrDefault();
+                payload["weight"] = record.Weight.GetValueOrDefault();
+                payload["port"] = record.Port.GetValueOrDefault();
+                break;
+        }
+        return payload;
+    }
+
     public static DnsRecord ParseDns(JsonElement item)
     {
         var type = String(item, "record_type", "type").ToUpperInvariant();

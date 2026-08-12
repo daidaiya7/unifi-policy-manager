@@ -22,9 +22,12 @@ public sealed class UniFiClient : IUniFiClient
     public string ApplicationVersion { get; private set; } = "未知";
     public AuthenticationMode AuthenticationMode { get; }
     public bool SupportsWrites => AuthenticationMode == AuthenticationMode.ApiKey;
+    public bool SupportsDnsWrites { get; private set; } = true;
     public string CapabilityNotice => SupportsWrites
         ? "API Key 模式：支持读取、写入、排序和策略变更中心。"
-        : "本地账号 Cookie 模式：支持读取；写入、排序和策略变更中心仅 API Key 可用。";
+        : SupportsDnsWrites
+            ? "本地账号 Cookie 模式：DNS 支持读写；ACL、防火墙、排序和策略变更中心仅 API Key 可用。"
+            : "本地账号 Cookie 模式：当前 Network 版本只支持读取；完整写入请使用 API Key。";
     public IReadOnlyList<UniFiSite> Sites { get; private set; } = [];
 
     private string ApiRoot => "/proxy/network/integration/v1";
@@ -51,7 +54,7 @@ public sealed class UniFiClient : IUniFiClient
             Timeout = TimeSpan.FromSeconds(30)
         };
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.4");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UniFi-Policy-Manager/4.1.5");
         if (authenticationMode == AuthenticationMode.ApiKey)
             _httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Key", apiKey);
     }
@@ -221,8 +224,15 @@ public sealed class UniFiClient : IUniFiClient
     {
         if (AuthenticationMode == AuthenticationMode.LocalAccount)
         {
-            using var local = await SendAsync(HttpMethod.Get, $"/proxy/network/v2/api/site/{Uri.EscapeDataString(RequireSiteReference())}/static-dns", null, cancellationToken);
-            return ReadLocalArray(local.RootElement).Select(LocalSessionPolicyMapper.ParseDns).Where(item => !string.IsNullOrWhiteSpace(item.RecordType)).ToList();
+            try
+            {
+                using var local = await SendAsync(HttpMethod.Get, LocalDnsPath(), null, cancellationToken);
+                return ReadLocalArray(local.RootElement).Select(LocalSessionPolicyMapper.ParseDns).Where(item => !string.IsNullOrWhiteSpace(item.RecordType)).ToList();
+            }
+            catch (UniFiApiException exception) when (DisableLocalDnsWritesIfUnsupported(exception))
+            {
+                throw;
+            }
         }
         var result = new List<DnsRecord>();
         var offset = 0;
@@ -249,6 +259,19 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<DnsRecord?> CreateRecordAsync(DnsRecord record, CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount)
+        {
+            RequireDnsWriteCapability();
+            try
+            {
+                using var local = await SendAsync(HttpMethod.Post, LocalDnsPath(), LocalSessionPolicyMapper.BuildDnsPayload(record), cancellationToken);
+                return ParseLocalDnsMutation(local.RootElement) ?? DnsValidator.Normalize(record);
+            }
+            catch (UniFiApiException exception) when (DisableLocalDnsWritesIfUnsupported(exception))
+            {
+                throw LocalDnsWriteUnavailable(exception);
+            }
+        }
         RequireWriteCapability();
         using var document = await SendAsync(HttpMethod.Post, DnsPoliciesPath, OfficialDnsPolicyMapper.BuildPayload(record), cancellationToken);
         return document.RootElement.ValueKind == JsonValueKind.Object ? OfficialDnsPolicyMapper.Parse(document.RootElement) : null;
@@ -256,6 +279,22 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task<DnsRecord?> UpdateRecordAsync(string id, DnsRecord record, CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount)
+        {
+            RequireDnsWriteCapability();
+            if (string.IsNullOrWhiteSpace(id)) throw new UniFiApiException("DNS 记录 ID 缺失。");
+            try
+            {
+                using var local = await SendAsync(HttpMethod.Put, $"{LocalDnsPath()}/{Uri.EscapeDataString(id)}", LocalSessionPolicyMapper.BuildDnsPayload(record, id), cancellationToken);
+                var updated = ParseLocalDnsMutation(local.RootElement) ?? DnsValidator.Normalize(record);
+                updated.Id ??= id;
+                return updated;
+            }
+            catch (UniFiApiException exception) when (DisableLocalDnsWritesIfUnsupported(exception))
+            {
+                throw LocalDnsWriteUnavailable(exception);
+            }
+        }
         RequireWriteCapability();
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("DNS Policy ID 不是有效的 UUID。");
         using var document = await SendAsync(HttpMethod.Put, $"{DnsPoliciesPath}/{Uri.EscapeDataString(id)}", OfficialDnsPolicyMapper.BuildPayload(record), cancellationToken);
@@ -264,6 +303,20 @@ public sealed class UniFiClient : IUniFiClient
 
     public async Task DeleteRecordAsync(string id, CancellationToken cancellationToken = default)
     {
+        if (AuthenticationMode == AuthenticationMode.LocalAccount)
+        {
+            RequireDnsWriteCapability();
+            if (string.IsNullOrWhiteSpace(id)) throw new UniFiApiException("DNS 记录 ID 缺失。");
+            try
+            {
+                using var local = await SendAsync(HttpMethod.Delete, $"{LocalDnsPath()}/{Uri.EscapeDataString(id)}", null, cancellationToken);
+                return;
+            }
+            catch (UniFiApiException exception) when (DisableLocalDnsWritesIfUnsupported(exception))
+            {
+                throw LocalDnsWriteUnavailable(exception);
+            }
+        }
         RequireWriteCapability();
         if (!Guid.TryParse(id, out _)) throw new UniFiApiException("DNS Policy ID 不是有效的 UUID。");
         using var responseDocument = await SendAsync(HttpMethod.Delete, $"{DnsPoliciesPath}/{Uri.EscapeDataString(id)}", null, cancellationToken);
@@ -468,6 +521,41 @@ public sealed class UniFiClient : IUniFiClient
     {
         if (!SupportsWrites)
             throw new UniFiApiException("当前使用本地账号 Cookie 模式，只支持读取。此写入操作仅 API Key 模式可用。");
+    }
+
+    private void RequireDnsWriteCapability()
+    {
+        if (!SupportsDnsWrites)
+            throw new UniFiApiException("当前 Network 版本不支持本地账号 Cookie DNS 写入；请改用 API Key。");
+    }
+
+    private string LocalDnsPath() => $"/proxy/network/v2/api/site/{Uri.EscapeDataString(RequireSiteReference())}/static-dns";
+
+    private bool DisableLocalDnsWritesIfUnsupported(UniFiApiException exception)
+    {
+        if (AuthenticationMode != AuthenticationMode.LocalAccount || exception.StatusCode is not (403 or 404 or 405)) return false;
+        SupportsDnsWrites = false;
+        return true;
+    }
+
+    private static UniFiApiException LocalDnsWriteUnavailable(UniFiApiException exception) => new(
+        "当前 Network 版本的 Cookie DNS 写入接口不可用；DNS 读取仍可继续，写入请改用 API Key。",
+        exception.StatusCode,
+        exception.Details);
+
+    private static DnsRecord? ParseLocalDnsMutation(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (root.TryGetProperty("data", out var data))
+            {
+                if (data.ValueKind == JsonValueKind.Object) return LocalSessionPolicyMapper.ParseDns(data);
+                if (data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0) return LocalSessionPolicyMapper.ParseDns(data[0]);
+            }
+            if (root.TryGetProperty("_id", out _) || root.TryGetProperty("id", out _)) return LocalSessionPolicyMapper.ParseDns(root);
+        }
+        if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0) return LocalSessionPolicyMapper.ParseDns(root[0]);
+        return null;
     }
 
     private async Task<IReadOnlyList<UniFiSite>> ListLocalSitesAsync(CancellationToken cancellationToken)

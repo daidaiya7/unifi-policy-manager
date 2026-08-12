@@ -58,7 +58,7 @@ struct LoginView: View {
                     Text("UniFi 策略管理")
                         .font(.system(size: 35, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("使用 API Key 通过官方 Integration API 完整管理策略，或使用 UniFi OS 本地账号 Cookie 只读查看 DNS、ACL 与防火墙。")
+                    Text("API Key 提供完整管理；兼容的 UniFi Network 版本可用本地账号 Cookie 写入 DNS，ACL 与防火墙仍只读。")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.white.opacity(0.68))
                         .lineSpacing(6)
@@ -66,7 +66,7 @@ struct LoginView: View {
                         .padding(.top, 18)
                     VStack(alignment: .leading, spacing: 15) {
                         LoginFeature(icon: "checkmark.shield", text: "API Key 使用官方 Integration API 完整管理")
-                        LoginFeature(icon: "eye", text: "本地账号 Cookie 使用 Network 会话接口只读查看")
+                        LoginFeature(icon: "network", text: "本地账号 Cookie 在兼容版本支持 DNS 读写")
                         LoginFeature(icon: "arrow.counterclockwise", text: "每次写入前重新读取并保存完整实时基线")
                         LoginFeature(icon: "key", text: "认证凭据存储在 macOS 钥匙串")
                     }
@@ -107,7 +107,7 @@ struct LoginView: View {
                                 Text("仅支持 Console 本地管理员账号，不支持需要 2FA 或 Passkey 的云端 SSO。")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Text("本地账号模式为只读；写入、启停、删除和排序仅 API Key 可用。部分读取接口取决于 Network 版本。")
+                                Text("本地账号模式在兼容的 Network 版本可写 DNS；ACL、防火墙、排序和策略变更仅 API Key。接口能力取决于 Network 版本。")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
                             }
@@ -343,7 +343,7 @@ struct OverviewView: View {
                 HStack(alignment: .top, spacing: 14) {
                     GroupBox("快速操作") {
                         VStack(spacing: 0) {
-                            ActionRow(icon: "network", title: model.supportsWrites ? "管理 DNS 记录" : "查看 DNS 记录", subtitle: model.supportsWrites ? "新增、编辑、启停或删除官方 DNS Policy" : "本地账号 Cookie 只读；写入仅 API Key") { model.selectedPage = .dns }
+                            ActionRow(icon: "network", title: model.canDNSWrite ? "管理 DNS 记录" : "查看 DNS 记录", subtitle: model.canDNSWrite ? "支持单项和批量 DNS 写入" : "当前 Cookie DNS 写接口不可用；可改用 API Key") { model.selectedPage = .dns }
                             Divider()
                             ActionRow(icon: "arrow.triangle.2.circlepath", title: "策略变更中心", subtitle: "导入完整基线、预览差异并安全同步") { model.selectedPage = .changes }
                             Divider()
@@ -423,7 +423,7 @@ struct DNSView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .bottom, spacing: 12) {
-                PageHeader(title: "DNS 记录", subtitle: model.supportsWrites ? "管理转发域名、A、AAAA、CNAME、MX、TXT 与 SRV。" : "本地账号 Cookie 只读；新增、编辑、启停和删除仅 API Key。")
+                PageHeader(title: "DNS 记录", subtitle: model.canDNSWrite ? "管理转发域名、A、AAAA、CNAME、MX、TXT 与 SRV。" : "当前 Cookie DNS 写接口不可用；读取仍可用，写入可改用 API Key。")
                 Spacer()
                 Picker("类型", selection: $model.dnsTypeFilter) {
                     ForEach(["全部", "NS", "A", "AAAA", "CNAME", "MX", "TXT", "SRV"], id: \.self) { Text($0 == "NS" ? "转发域名" : $0) }
@@ -434,10 +434,10 @@ struct DNSView: View {
                 Button(role: .destructive) { confirmingBatchDelete = true } label: {
                     Label("删除转发域（\(selectedForwardIDs.count)）", systemImage: "trash")
                 }
-                .disabled(selectedForwardIDs.isEmpty || !model.canWrite)
+                .disabled(selectedForwardIDs.isEmpty || !model.canDNSWrite)
                 Button { editingRecord = nil; showingEditor = true } label: { Label("新增记录", systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!model.canWrite)
+                    .disabled(!model.canDNSWrite)
             }
             .padding(20)
 
@@ -469,9 +469,9 @@ struct DNSView: View {
                 TableColumn("附加参数") { record in Text(record.extraLabel).foregroundStyle(.secondary).lineLimit(1) }.width(min: 100, ideal: 150)
                 TableColumn("操作") { record in
                     HStack(spacing: 4) {
-                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: "仅 API Key：" + (record.enabled ? "停用" : "启用")) { model.toggleDNS(record) }.disabled(!model.canWrite)
-                        IconAction(symbol: "pencil", help: "仅 API Key：编辑") { editingRecord = record; showingEditor = true }.disabled(!model.canWrite)
-                        IconAction(symbol: "trash", help: "仅 API Key：删除", role: .destructive) { deletingRecord = record }.disabled(!model.canWrite)
+                        IconAction(symbol: record.enabled ? "pause.circle" : "play.circle", help: record.enabled ? "停用 DNS" : "启用 DNS") { model.toggleDNS(record) }.disabled(!model.canDNSWrite)
+                        IconAction(symbol: "pencil", help: "编辑 DNS") { editingRecord = record; showingEditor = true }.disabled(!model.canDNSWrite)
+                        IconAction(symbol: "trash", help: "删除 DNS", role: .destructive) { deletingRecord = record }.disabled(!model.canDNSWrite)
                     }
                 }.width(105)
             }
@@ -484,7 +484,7 @@ struct DNSView: View {
         .alert("删除 DNS 记录？", isPresented: Binding(get: { deletingRecord != nil }, set: { if !$0 { deletingRecord = nil } })) {
             Button("取消", role: .cancel) { deletingRecord = nil }
             Button("删除", role: .destructive) { if let record = deletingRecord { model.deleteDNS(record) }; deletingRecord = nil }
-        } message: { Text("删除前会重新读取并保存 DNS、ACL 和防火墙完整实时基线。") }
+        } message: { Text(model.supportsWrites ? "删除前会重新读取并保存 DNS、ACL 和防火墙完整实时基线。" : "删除前会重新读取并保存 DNS 实时快照。") }
         .alert("批量删除转发域名？", isPresented: $confirmingBatchDelete) {
             Button("取消", role: .cancel) { }
             Button("删除 \(selectedForwardIDs.count) 条", role: .destructive) {
@@ -492,7 +492,7 @@ struct DNSView: View {
                 model.batchDeleteForwardDomains(selected)
                 selectedForwardIDs.removeAll()
             }
-        } message: { Text("只会删除选中的转发域名。执行前会保存完整实时策略快照。") }
+        } message: { Text(model.supportsWrites ? "只会删除选中的转发域名。执行前会保存完整实时策略快照。" : "只会删除选中的转发域名。执行前会保存 DNS 实时快照。") }
     }
 }
 
@@ -574,7 +574,7 @@ struct DNSRecordEditor: View {
                 if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
                 Spacer()
                 Button("取消") { dismiss() }
-                Button("保存") { save() }.buttonStyle(.borderedProminent).disabled(!model.canWrite)
+                Button("保存") { save() }.buttonStyle(.borderedProminent).disabled(!model.canDNSWrite)
             }
         }
         .padding(24)

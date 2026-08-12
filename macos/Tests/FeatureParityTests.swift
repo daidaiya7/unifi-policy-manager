@@ -13,10 +13,11 @@ final class FeatureParityTests: XCTestCase {
 
         XCTAssertTrue(apiKeyClient.supportsWrites)
         XCTAssertFalse(localClient.supportsWrites)
+        XCTAssertTrue(localClient.supportsDNSWrites)
         XCTAssertTrue(localClient.capabilityNotice.contains("仅 API Key"))
     }
 
-    func testLocalAccountRejectsWritesBeforeNetworkRequest() async throws {
+    func testLocalAccountRejectsPolicyWritesBeforeNetworkRequest() async throws {
         let client = try UniFiAPI(
             host: "192.0.2.1",
             credentials: .localAccount(username: "local-admin", password: "test-password"),
@@ -24,8 +25,8 @@ final class FeatureParityTests: XCTestCase {
         )
 
         do {
-            _ = try await client.createDNS(DNSRecord(recordType: "A", key: "blocked.example.com", value: "192.0.2.10"))
-            XCTFail("Local-account Cookie mode unexpectedly allowed a write.")
+            _ = try await client.createPolicy(.acl, json: "{}")
+            XCTFail("Local-account Cookie mode unexpectedly allowed a policy write.")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("仅 API Key"))
         }

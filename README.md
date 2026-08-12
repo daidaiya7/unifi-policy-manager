@@ -1,20 +1,21 @@
-# UniFi Policy Manager 双认证版 4.1.4
+# UniFi Policy Manager 双认证版 4.1.5
 
 [![Build](https://github.com/daidaiya7/unifi-policy-manager/actions/workflows/build.yml/badge.svg)](https://github.com/daidaiya7/unifi-policy-manager/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/daidaiya7/unifi-policy-manager)](https://github.com/daidaiya7/unifi-policy-manager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-UniFi Network 双认证策略管理工具。Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式：API Key 通过 Ubiquiti Integration API 提供完整管理；本地账号建立 Cookie 会话，通过 Network 本地接口只读查看。
+UniFi Network 双认证策略管理工具。Windows 与 macOS 均支持 API Key 和 UniFi OS 本地管理员用户名密码两种登录方式：API Key 通过 Ubiquiti Integration API 提供完整管理；本地账号建立 Cookie 会话，在兼容的 Network 版本上支持 DNS 读取与写入，ACL 和防火墙保持只读。
 
-> **重要：双认证不代表两种登录方式都能写入。** 本地账号 Cookie 模式只提供智能分项读取，不能批量写入 DNS，也不能新增、修改、启停、删除或排序 ACL/防火墙策略；这些操作以及策略变更中心的正式执行都必须使用 API Key。Cookie 模式可读取的 DNS、ACL、防火墙项目还取决于当前 UniFi Network 版本，某项不可用时软件会保留其他成功读取的内容，并提示该项改用 API Key。
+> **重要：本地账号 DNS 写入取决于 Network 版本。** 软件通过 `/proxy/network/v2/api/site/{site}/static-dns` 尝试 DNS 新增、编辑、启停、删除和批量操作。若控制器返回 403、404 或 405，软件会立即将 DNS 降级为只读并提示改用 API Key。ACL、防火墙、策略排序和策略变更中心的正式执行仍仅 API Key 可用。
 
 - Windows：C# / .NET 8 / WPF 完整版
 - macOS：SwiftUI 原生完整版，与 Windows 版共享官方 API 功能范围和安全写入流程
-- 双认证：API Key 完整管理；或 UniFi OS 本地管理员用户名密码只读查看（不支持云端 SSO、2FA、Passkey）
+- 双认证：API Key 完整管理；或 UniFi OS 本地管理员用户名密码进行分级管理（兼容版本可写 DNS，ACL/防火墙只读；不支持云端 SSO、2FA、Passkey）
 - Cookie 接口取决于 Network 版本；某个读取接口不可用时会明确标注，并提示改用 API Key，不会影响其他可用部分
 
 ## 4.x 主要变化
 
+- 4.1.5：本地账号 Cookie 模式增加 DNS 单项与批量写入；不支持该 v2 写端点的 Network 版本会自动降级为只读
 - 4.1.4 双认证版：同步上游 Windows/macOS 完整功能；两端均支持 API Key 和本地账号登录，Cookie 模式按 Network 版本提供只读访问
 - 4.1.4：修复 macOS 内置规则区域滚动，并延续统一发布与签名流程
 - 4.1.3：强化 Windows/macOS 发布签名、打包和校验流程
@@ -48,7 +49,7 @@ API Key 模式通过官方 Integration API 支持的 Policy Table 类型：
 | --- | --- | --- |
 | 登录与多站点选择 | 支持 | 支持 |
 | DNS、ACL、防火墙读取 | 支持 | 支持；取决于 Network 版本提供的本地接口 |
-| DNS 单项及批量写入 | 支持 | **不支持，仅 API Key** |
+| DNS 单项及批量写入 | 支持 | **兼容版本支持；403/404/405 时自动降级只读** |
 | ACL/防火墙新增、编辑、启停、删除 | 支持 | **不支持，仅 API Key** |
 | 策略排序、策略变更中心正式执行 | 支持 | **不支持，仅 API Key** |
 | 导出当前已读取基线 | 支持 | 支持 |
@@ -83,7 +84,7 @@ macOS 端使用系统钥匙串保存 API Key 或本地账号密码；API Key 模
 - UCG 使用自签名证书时不要勾选“验证 HTTPS 证书”
 - Windows 勾选“记住认证凭据”后，密钥或密码使用 DPAPI 按当前用户加密保存；macOS 使用系统钥匙串
 
-本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后从 Network 本地会话接口智能分项读取站点、DNS、ACL 和防火墙数据；它不会再尝试用 Cookie 访问只接受 `X-API-Key` 的 `/proxy/network/integration/v1/...`。本地账号模式为只读，不能批量写入 DNS，也不能写入 ACL 或防火墙。具体可读取的部分取决于已安装的 Network 版本；某一项返回不可用时，程序保留其他成功读取的内容，并标注该项可改用 API Key。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。
+本地账号登录调用 UniFi OS 的 `/api/auth/login` 建立 Cookie 会话，然后从 Network 本地会话接口智能分项读取站点、DNS、ACL 和防火墙数据；它不会再尝试用 Cookie 访问只接受 `X-API-Key` 的 `/proxy/network/integration/v1/...`。DNS 通过 v2 `static-dns` 接口尝试 CRUD 和批量写入，写入前重新读取并保存 DNS 实时快照；如果该版本不允许 Cookie 写入，软件会自动禁用后续 DNS 写操作。ACL 和防火墙仍为只读。仅支持 UniFi OS 本地管理员账号，不支持 Ubiquiti 云端 SSO、2FA 或 Passkey 账号。
 
 ## 策略变更中心
 
@@ -163,11 +164,11 @@ EXE 内部直接封装了 212 条按服务分类的转发域规则，不依赖�
 ## 演示与自测
 
 ```powershell
-.\publish-4.1.4\UniFi-Policy-Manager.exe --demo
+.\publish-4.1.5\UniFi-Policy-Manager.exe --demo
 ```
 
 ```powershell
-Start-Process .\publish-4.1.4\UniFi-Policy-Manager.exe -ArgumentList '--self-test','--self-test-output=self-test.json' -Wait
+Start-Process .\publish-4.1.5\UniFi-Policy-Manager.exe -ArgumentList '--self-test','--self-test-output=self-test.json' -Wait
 ```
 
 ## 构建
@@ -181,8 +182,8 @@ Start-Process .\publish-4.1.4\UniFi-Policy-Manager.exe -ArgumentList '--self-tes
 输出：
 
 ```text
-publish-4.1.4\UniFi-Policy-Manager.exe
-UniFi-Policy-Manager-4.1.4-win-x64.zip
+publish-4.1.5\UniFi-Policy-Manager.exe
+UniFi-Policy-Manager-4.1.5-win-x64.zip
 ```
 
 也可以直接使用标准 .NET 命令：

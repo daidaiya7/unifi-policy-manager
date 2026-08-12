@@ -115,17 +115,41 @@ public static class SelfTest
             return Task.CompletedTask;
         });
 
-        await CheckAsync("local_cookie_write_is_blocked_before_request", async () =>
+        await CheckAsync("local_cookie_dns_write_capability_and_policy_guard", async () =>
         {
             using var client = new UniFiClient("https://192.0.2.1", AuthenticationMode.LocalAccount, null, verifyTls: false);
             if (client.SupportsWrites) throw new Exception("Local Cookie client unexpectedly reports write capability.");
+            if (!client.SupportsDnsWrites) throw new Exception("Local Cookie client did not expose DNS write capability.");
+            foreach (var input in AllRecordTypes())
+            {
+                var id = $"local-{input.RecordType.ToLowerInvariant()}-1";
+                var normalized = DnsValidator.Normalize(input);
+                var payload = LocalSessionPolicyMapper.BuildDnsPayload(input, id);
+                if (!Equals(payload["_id"], id) || !Equals(payload["record_type"], normalized.RecordType) ||
+                    !Equals(payload["key"], normalized.Key) || !Equals(payload["value"], normalized.Value) ||
+                    !Equals(payload["enabled"], normalized.Enabled))
+                    throw new Exception($"Local Cookie {input.RecordType} DNS payload mapping failed.");
+
+                var expectsTtl = input.RecordType is "A" or "AAAA" or "CNAME";
+                var expectsPriority = input.RecordType is "MX" or "SRV";
+                var expectsSrvFields = input.RecordType == "SRV";
+                if (payload.ContainsKey("ttl") != expectsTtl ||
+                    payload.ContainsKey("priority") != expectsPriority ||
+                    payload.ContainsKey("weight") != expectsSrvFields ||
+                    payload.ContainsKey("port") != expectsSrvFields)
+                    throw new Exception($"Local Cookie {input.RecordType} DNS payload contains incorrect optional fields.");
+                if (expectsTtl && !Equals(payload["ttl"], normalized.Ttl.GetValueOrDefault()))
+                    throw new Exception($"Local Cookie {input.RecordType} TTL mapping failed.");
+                if (expectsPriority && !Equals(payload["priority"], normalized.Priority.GetValueOrDefault()))
+                    throw new Exception($"Local Cookie {input.RecordType} priority mapping failed.");
+                if (expectsSrvFields && (!Equals(payload["weight"], normalized.Weight.GetValueOrDefault()) ||
+                    !Equals(payload["port"], normalized.Port.GetValueOrDefault())))
+                    throw new Exception("Local Cookie SRV weight or port mapping failed.");
+            }
             try
             {
-                await client.CreateRecordAsync(new DnsRecord
-                {
-                    RecordType = "A", Key = "blocked.example.com", Value = "192.0.2.10", Enabled = true
-                });
-                throw new Exception("Local Cookie client unexpectedly allowed a DNS write.");
+                await client.CreatePolicyAsync(OfficialPolicyKind.Acl, "{}");
+                throw new Exception("Local Cookie client unexpectedly allowed a policy write.");
             }
             catch (UniFiApiException exception) when (exception.Message.Contains("仅 API Key", StringComparison.Ordinal))
             {

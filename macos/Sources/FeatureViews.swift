@@ -19,9 +19,9 @@ struct DNSBatchPanel: View {
                         Button("选择外部规则文件", systemImage: "doc.badge.plus") { model.chooseDNSImportFile() }
                         Button("保存 CSV 模板", systemImage: "square.and.arrow.down") { model.saveDNSTemplate() }
                         Spacer(minLength: 0)
-                        Button(model.supportsWrites ? "预览并新增" : "预览规则", systemImage: "checklist") { model.previewDNSBatchAdd() }
+                        Button(model.canDNSWrite ? "预览并新增" : "预览规则", systemImage: "checklist") { model.previewDNSBatchAdd() }
                             .buttonStyle(.borderedProminent)
-                            .help(model.supportsWrites ? "预览待新增规则" : "可预览规则；正式写入仅 API Key 模式可用")
+                            .help(model.canDNSWrite ? "预览待新增规则" : "当前 Cookie DNS 写接口不可用；正式写入可改用 API Key")
                     }
                     .frame(width: 245)
 
@@ -92,12 +92,12 @@ private struct DNSBatchPreviewView: View {
                 }
             }
             HStack {
-                Text("正式新增前会再次读取当前策略并保存完整快照。").font(.caption).foregroundStyle(.secondary)
+                Text(model.supportsWrites ? "正式新增前会再次读取当前策略并保存完整快照。" : "正式新增前会再次读取并保存 DNS 实时快照。").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { dismiss() }
                 Button("新增 \(preview.pending.count) 条") { confirm(); dismiss() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(preview.pending.isEmpty || !model.canWrite)
+                    .disabled(preview.pending.isEmpty || !model.canDNSWrite)
             }
         }
         .padding(22)

@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     @Published var firewallRules: [PolicyRule] = []
     @Published var references: [PolicyReference] = []
     @Published var writeReady = false
+    @Published var dnsWriteReady = false
     @Published var search = ""
     @Published var dnsTypeFilter = "全部"
     @Published var lastBackupURL: URL?
@@ -78,10 +79,12 @@ final class AppModel: ObservableObject {
     var versionLabel: String { demoMode ? "Demo 10.4.57" : (api?.applicationVersion ?? "未知") }
     var supportsWrites: Bool { demoMode || api?.supportsWrites == true }
     var canWrite: Bool { supportsWrites && writeReady }
+    var supportsDNSWrites: Bool { demoMode || api?.supportsDNSWrites == true }
+    var canDNSWrite: Bool { supportsDNSWrites && dnsWriteReady }
     var capabilityNotice: String { demoMode ? "演示模式：不会修改真实 UCG。" : (api?.capabilityNotice ?? "") }
     var authenticationLabel: String {
         if demoMode { return "演示模式" }
-        return supportsWrites ? "API Key · 完整管理" : "本地账号 Cookie · 只读"
+        return supportsWrites ? "API Key · 完整管理" : canDNSWrite ? "本地账号 Cookie · DNS 可写" : "本地账号 Cookie · 只读"
     }
     var totalCount: Int { dnsRecords.count + aclRules.count + firewallRules.count }
     var canConnect: Bool {
@@ -161,6 +164,7 @@ final class AppModel: ObservableObject {
         connected = true
         demoMode = false
         writeReady = false
+        dnsWriteReady = false
         selectedPage = .overview
         await refreshAllBody()
         apiKey = ""
@@ -179,6 +183,7 @@ final class AppModel: ObservableObject {
         firewallOrdering = PolicyOrderingSnapshot(kind: .firewall, beforeSystemDefined: firewallRules.filter(\.canModify).map(\.id))
         batchDNSServer = dnsRecords.first(where: \.isForwardDomain)?.value ?? "192.168.1.10"
         writeReady = true
+        dnsWriteReady = true
         selectedPage = .overview
         status = "演示模式：不会连接或修改真实 UCG"
     }
@@ -199,6 +204,7 @@ final class AppModel: ObservableObject {
         changePlan = nil
         dnsBatchPreview = nil
         writeReady = false
+        dnsWriteReady = false
         search = ""
         apiKey = rememberCredential ? KeychainService.load(account: KeychainService.apiKeyAccount) : ""
         password = rememberCredential ? KeychainService.load(account: KeychainService.localPasswordAccount) : ""
@@ -218,12 +224,14 @@ final class AppModel: ObservableObject {
     func refreshAll() { Task { await perform("正在刷新全部策略…") { await self.refreshAllBody() } } }
 
     private func refreshAllBody() async {
-        guard !demoMode else { writeReady = true; status = "演示数据已刷新"; return }
-        guard let api else { writeReady = false; status = "尚未连接 UniFi Console"; return }
+        guard !demoMode else { writeReady = true; dnsWriteReady = true; status = "演示数据已刷新"; return }
+        guard let api else { writeReady = false; dnsWriteReady = false; status = "尚未连接 UniFi Console"; return }
         if !api.supportsWrites {
             var unavailable: [String] = []
-            do { dnsRecords = try await api.listDNSRecords().sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending } }
-            catch { dnsRecords = []; unavailable.append("DNS") }
+            do {
+                dnsRecords = try await api.listDNSRecords().sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+                dnsWriteReady = api.supportsDNSWrites
+            } catch { dnsRecords = []; dnsWriteReady = false; unavailable.append("DNS") }
             do { aclRules = try await api.listPolicies(.acl) }
             catch { aclRules = []; unavailable.append("ACL") }
             do { firewallRules = try await api.listPolicies(.firewall) }
@@ -233,7 +241,7 @@ final class AppModel: ObservableObject {
             firewallOrdering = nil
             writeReady = false
             if loadedBundle != nil { rebuildChangePlan() }
-            status = "已读取 DNS \(dnsRecords.count) 条、ACL \(aclRules.count) 条、防火墙 \(firewallRules.count) 条。本地账号 Cookie 只读"
+            status = "已读取 DNS \(dnsRecords.count) 条、ACL \(aclRules.count) 条、防火墙 \(firewallRules.count) 条。" + (dnsWriteReady ? "本地账号 Cookie 支持 DNS 写入；ACL/防火墙只读" : "本地账号 Cookie 当前只读")
             if !unavailable.isEmpty { status += "；当前版本 Cookie 接口不可用：\(unavailable.joined(separator: "、"))，可改用 API Key" }
             return
         }
@@ -242,20 +250,22 @@ final class AppModel: ObservableObject {
             apply(core)
             references = await api.listReferences()
             writeReady = true
+            dnsWriteReady = true
             if loadedBundle != nil { rebuildChangePlan() }
             status = "已读取 DNS \(dnsRecords.count) 条、ACL \(aclRules.count) 条、防火墙 \(firewallRules.count) 条"
         } catch {
             writeReady = false
+            dnsWriteReady = false
             errorMessage = error.localizedDescription
             status = "策略读取不完整，写入已禁用"
         }
     }
 
     func saveDNS(_ record: DNSRecord) {
-        guard supportsWrites else { showWriteOnlyNotice(); return }
+        guard canDNSWrite else { showDNSWriteUnavailableNotice(); return }
         Task {
             await perform(record.id == nil ? "正在新增 DNS 记录…" : "正在更新 DNS 记录…") {
-                try await self.backup(reason: record.id == nil ? "before-create-dns" : "before-update-dns")
+                try await self.backupDNS(reason: record.id == nil ? "before-create-dns" : "before-update-dns")
                 if self.demoMode {
                     var saved = record
                     if saved.id == nil { saved.id = UUID().uuidString; self.dnsRecords.append(saved) }
@@ -271,10 +281,10 @@ final class AppModel: ObservableObject {
     }
 
     func deleteDNS(_ record: DNSRecord) {
-        guard supportsWrites else { showWriteOnlyNotice(); return }
+        guard canDNSWrite else { showDNSWriteUnavailableNotice(); return }
         Task {
             await perform("正在删除 DNS 记录…") {
-                try await self.backup(reason: "before-delete-dns")
+                try await self.backupDNS(reason: "before-delete-dns")
                 if self.demoMode { self.dnsRecords.removeAll { $0.stableID == record.stableID } }
                 else if let api = self.api { try await api.deleteDNS(record); await self.refreshAllBody() }
                 BackupService.log("delete dns \(record.key)")
@@ -330,12 +340,12 @@ final class AppModel: ObservableObject {
     }
 
     func applyDNSBatchAdd(_ preview: DNSBatchPreview) {
-        guard supportsWrites else { showWriteOnlyNotice(); return }
+        guard canDNSWrite else { showDNSWriteUnavailableNotice(); return }
         dnsBatchPreview = nil
         Task {
             await perform("正在批量新增 DNS 规则…") {
                 guard !preview.pending.isEmpty else { self.status = "没有需要新增的 DNS 规则"; return }
-                try await self.backup(reason: "before-dns-batch-add")
+                try await self.backupDNS(reason: "before-dns-batch-add")
                 var created = 0
                 var failures: [String] = []
                 var currentKeys = Set(self.dnsRecords.map(DNSImportService.identity))
@@ -362,12 +372,12 @@ final class AppModel: ObservableObject {
     }
 
     func batchDeleteForwardDomains(_ records: [DNSRecord]) {
-        guard supportsWrites else { showWriteOnlyNotice(); return }
+        guard canDNSWrite else { showDNSWriteUnavailableNotice(); return }
         let selected = records.filter(\.isForwardDomain)
         guard !selected.isEmpty else { return }
         Task {
             await perform("正在批量删除转发域名…") {
-                try await self.backup(reason: "before-dns-batch-delete")
+                try await self.backupDNS(reason: "before-dns-batch-delete")
                 var deleted = 0
                 var failures: [String] = []
                 for record in selected {
@@ -741,6 +751,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func backupDNS(reason: String) async throws {
+        if demoMode {
+            lastBackupURL = try BackupService.saveSnapshot(reason: reason, bundle: bundle())
+            return
+        }
+        guard let api else { throw UniFiError.api("尚未连接 UniFi Console。") }
+        if api.supportsWrites { try await backup(reason: reason); return }
+        do {
+            dnsRecords = try await api.listDNSRecords().sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+            dnsWriteReady = api.supportsDNSWrites
+            lastBackupURL = try BackupService.saveSnapshot(reason: reason, bundle: bundle())
+        } catch {
+            dnsWriteReady = false
+            throw UniFiError.api("无法读取 DNS 实时快照，写入已取消：\(error.localizedDescription)")
+        }
+    }
+
     private func bundle(core: CorePolicyState? = nil) -> PolicyBundle {
         let currentDNS = core?.dns ?? dnsRecords
         let currentACL = core?.acl ?? aclRules
@@ -768,11 +795,20 @@ final class AppModel: ObservableObject {
         status = "本地账号 Cookie 只读"
     }
 
+    private func showDNSWriteUnavailableNotice() {
+        errorMessage = "当前 Network 版本不支持本地账号 Cookie DNS 写入；请改用 API Key。"
+        status = "Cookie DNS 写入不可用"
+    }
+
     private func perform(_ message: String, operation: @escaping () async throws -> Void) async {
         guard !busy else { return }
         busy = true
         status = message
-        do { try await operation() } catch { errorMessage = error.localizedDescription; status = "操作失败" }
+        do { try await operation() } catch {
+            dnsWriteReady = demoMode || api?.supportsDNSWrites == true
+            errorMessage = error.localizedDescription
+            status = "操作失败"
+        }
         busy = false
     }
 

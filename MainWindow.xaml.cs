@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private string _lastRefreshNotice = string.Empty;
     private bool _uiReady;
     public bool SupportsWrites => _client?.SupportsWrites == true;
+    public bool SupportsDnsWrites => _client?.SupportsDnsWrites == true;
 
     public MainWindow(bool demoMode = false)
     {
@@ -164,17 +165,7 @@ public partial class MainWindow : Window
         TargetText.Text = _demoMode ? "模拟数据（不会连接路由器）" : $"已连接 {_client.Target}";
         SiteInfoText.Text = $"Site: {_client.Site} · UUID: {_client.SiteId} · Network {_client.ApplicationVersion}";
         SidebarSiteText.Text = $"{_client.Site} · {_client.ApplicationVersion}";
-        var supportsWrites = _client.SupportsWrites;
-        CapabilityNoticeText.Text = _client.CapabilityNotice;
-        CapabilityNoticeText.Visibility = supportsWrites ? Visibility.Collapsed : Visibility.Visible;
-        OverviewApiBadgeText.Text = supportsWrites ? "实时读取 · Integration API" : "本地账号 Cookie · 只读";
-        ChangeCenterNavRadio.IsEnabled = supportsWrites;
-        OpenChangeCenterButton.IsEnabled = supportsWrites;
-        DnsBatchExpander.IsEnabled = supportsWrites;
-        AddDnsButton.IsEnabled = supportsWrites;
-        AddAclButton.IsEnabled = supportsWrites;
-        AddFirewallButton.IsEnabled = supportsWrites;
-        SelectAllCheckBox.IsEnabled = supportsWrites;
+        ApplyCapabilityState();
         RecordsGrid.Items.Refresh();
         DashboardNavRadio.IsChecked = true;
         NavigateTo("Overview");
@@ -320,6 +311,7 @@ public partial class MainWindow : Window
             ? string.Empty
             : $"当前 Network 版本的 Cookie 接口无法读取：{string.Join("、", unavailable)}；这些功能可改用 API Key。";
         if (_loadedBundle is not null) RebuildChangePlan();
+        ApplyCapabilityState();
     }
 
     private static async Task RefreshLocalSectionAsync(string name, Func<Task> refresh, Action clear, ICollection<string> unavailable)
@@ -335,7 +327,9 @@ public partial class MainWindow : Window
     private string RefreshSummary()
     {
         var summary = $"已读取 DNS {_records.Count} 条、ACL {_aclRules.Count} 条、防火墙 {_firewallRules.Count} 条。";
-        if (!SupportsWrites) summary += " 本地账号 Cookie 为只读；写入、排序和策略变更中心仅 API Key 可用。";
+        if (!SupportsWrites) summary += SupportsDnsWrites
+            ? " 本地账号 Cookie 支持 DNS 写入；ACL、防火墙、排序和策略变更中心仅 API Key 可用。"
+            : " 本地账号 Cookie 当前只读；完整写入请使用 API Key。";
         if (_lastRefreshNotice.Length > 0) summary += " " + _lastRefreshNotice;
         return summary;
     }
@@ -386,7 +380,7 @@ public partial class MainWindow : Window
         TxtCount.Text = _records.Count(record => record.RecordType == "TXT").ToString();
         SrvCount.Text = _records.Count(record => record.RecordType == "SRV").ToString();
         var displayed = _view?.Cast<DnsRecord>().Count() ?? _records.Count;
-        RecordSummaryText.Text = $"共 {_records.Count} 条，当前显示 {displayed} 条；{(SupportsWrites ? "仅转发域名可多选批量删除。" : "本地账号 Cookie 只读，增删改仅 API Key。")}";
+        RecordSummaryText.Text = $"共 {_records.Count} 条，当前显示 {displayed} 条；{(SupportsDnsWrites ? "支持单项和批量 DNS 写入；仅转发域名可多选批量删除。" : "当前 Cookie DNS 写接口不可用，写入请使用 API Key。")}";
         DnsTabHeaderText.Text = $"DNS 记录 ({_records.Count})";
         UpdateDashboardStatistics();
     }
@@ -417,7 +411,7 @@ public partial class MainWindow : Window
 
     private void AddButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         var editor = new RecordEditorWindow { Owner = this };
         if (editor.ShowDialog() == true && editor.Result is not null) _ = CreateRecordAsync(editor.Result);
     }
@@ -426,7 +420,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync("正在创建记录…", async () =>
         {
-            var backup = await _backupService.SaveSnapshotAsync("before-create", Snapshot());
+            var backup = await _backupService.SaveSnapshotAsync("before-create", await CaptureDnsSnapshotAsync());
             var created = await RequireClient().CreateRecordAsync(record) ?? record.Clone();
             await RefreshRecordsAsync();
             if (string.IsNullOrWhiteSpace(created.Id)) created = FindMatchingRecord(record) ?? created;
@@ -449,7 +443,7 @@ public partial class MainWindow : Window
 
     private void OpenEditor(DnsRecord record)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         var editor = new RecordEditorWindow(record) { Owner = this };
         if (editor.ShowDialog() == true && editor.Result is not null) _ = UpdateRecordAsync(record, editor.Result);
     }
@@ -458,7 +452,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync("正在更新记录…", async () =>
         {
-            var backup = await _backupService.SaveSnapshotAsync("before-update", Snapshot());
+            var backup = await _backupService.SaveSnapshotAsync("before-update", await CaptureDnsSnapshotAsync());
             await RequireClient().UpdateRecordAsync(before.Id ?? throw new UniFiApiException("记录 ID 缺失。"), after);
             _lastOperation = new OperationSnapshot { Kind = OperationKind.Update, RecordId = before.Id, Records = [before.Clone()] };
             await _backupService.LogOperationAsync(new { kind = "update", before, after, backup });
@@ -469,7 +463,7 @@ public partial class MainWindow : Window
 
     private async void ToggleRowButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not DnsRecord record) return;
         var updated = record.Clone();
         updated.Enabled = !record.Enabled;
@@ -478,12 +472,12 @@ public partial class MainWindow : Window
 
     private async void DeleteRowButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         if ((sender as FrameworkElement)?.Tag is not DnsRecord record) return;
         if (MessageBox.Show(this, $"确定删除 {record.TypeLabel}“{record.Key}”吗？\n\n删除前会自动保存完整 DNS 快照。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         await RunBusyAsync("正在删除记录…", async () =>
         {
-            var backup = await _backupService.SaveSnapshotAsync("before-delete", Snapshot());
+            var backup = await _backupService.SaveSnapshotAsync("before-delete", await CaptureDnsSnapshotAsync());
             await RequireClient().DeleteRecordAsync(record.Id ?? throw new UniFiApiException("记录 ID 缺失。"));
             _lastOperation = new OperationSnapshot { Kind = OperationKind.Delete, Records = [record.Clone()] };
             await _backupService.LogOperationAsync(new { kind = "delete", record, backup });
@@ -888,7 +882,7 @@ public partial class MainWindow : Window
 
     private async void PreviewBatchAddButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         try
         {
             var input = ImportService.ParseText(BatchRulesTextBox.Text, BatchDnsServerTextBox.Text.Trim());
@@ -906,7 +900,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync($"正在新增 {preview.Pending.Count} 条 DNS 规则…", async () =>
         {
-            var backup = await _backupService.SaveSnapshotAsync("before-dns-batch-add", Snapshot());
+            var backup = await _backupService.SaveSnapshotAsync("before-dns-batch-add", await CaptureDnsSnapshotAsync());
             var client = RequireClient();
             var currentKeys = _records.Select(ImportService.IdentityKey).ToHashSet(ImportService.IdentityComparer);
             var created = new List<DnsRecord>();
@@ -965,9 +959,9 @@ public partial class MainWindow : Window
         if (!_uiReady || BatchDeleteButton is null || BatchDeletePanelButton is null || BatchDeleteSelectionText is null || SelectAllCheckBox is null) return;
         var selected = _records.Count(record => record.IsForwardDomain && record.IsSelectedForBatch);
         BatchDeleteButton.Content = $"批量删除转发域名 ({selected})";
-        BatchDeleteButton.IsEnabled = SupportsWrites && selected > 0;
+        BatchDeleteButton.IsEnabled = SupportsDnsWrites && selected > 0;
         BatchDeletePanelButton.Content = $"批量删除转发域名 ({selected})";
-        BatchDeletePanelButton.IsEnabled = SupportsWrites && selected > 0;
+        BatchDeletePanelButton.IsEnabled = SupportsDnsWrites && selected > 0;
         var visible = _view?.Cast<DnsRecord>().Where(record => record.IsForwardDomain).ToList() ?? [];
         BatchDeleteSelectionText.Text = $"当前列表显示 {visible.Count} 条转发域名，已选择 {selected} 条。批量删除会先预览并保存完整 DNS 快照。";
         SelectAllCheckBox.IsChecked = visible.Count > 0 && visible.All(record => record.IsSelectedForBatch);
@@ -975,14 +969,14 @@ public partial class MainWindow : Window
 
     private async void BatchDeleteButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         var selected = _records.Where(record => record.IsForwardDomain && record.IsSelectedForBatch).Select(record => record.Clone()).ToList();
         if (selected.Count == 0) return;
         var preview = new BatchPreviewWindow(selected) { Owner = this };
         if (preview.ShowDialog() != true) return;
         await RunBusyAsync($"正在删除 {selected.Count} 条转发域名…", async () =>
         {
-            var backup = await _backupService.SaveSnapshotAsync("before-forward-batch-delete", Snapshot());
+            var backup = await _backupService.SaveSnapshotAsync("before-forward-batch-delete", await CaptureDnsSnapshotAsync());
             var deleted = new List<DnsRecord>();
             var failed = new List<string>();
             foreach (var record in selected)
@@ -1005,13 +999,13 @@ public partial class MainWindow : Window
 
     private async void UndoButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!RequireWriteMode()) return;
+        if (!RequireDnsWriteMode()) return;
         if (_lastOperation is null) return;
         if (MessageBox.Show(this, "确定撤销上一次由本程序完成的操作吗？\n\n撤销前也会保存完整快照。", "确认撤销", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         await RunBusyAsync("正在撤销…", async () =>
         {
             var operation = _lastOperation;
-            var backup = await _backupService.SaveSnapshotAsync("before-undo", Snapshot());
+            var backup = await _backupService.SaveSnapshotAsync("before-undo", await CaptureDnsSnapshotAsync());
             var client = RequireClient();
             switch (operation.Kind)
             {
@@ -1065,6 +1059,12 @@ public partial class MainWindow : Window
 
     private IReadOnlyList<DnsRecord> Snapshot() => _records.Select(record => record.Clone()).ToList();
 
+    private async Task<IReadOnlyList<DnsRecord>> CaptureDnsSnapshotAsync()
+    {
+        var current = await RequireClient().ListRecordsAsync();
+        return current.Select(record => record.Clone()).ToList();
+    }
+
     private DnsRecord? FindMatchingRecord(DnsRecord target)
     {
         var identity = ImportService.IdentityKey(target);
@@ -1073,7 +1073,14 @@ public partial class MainWindow : Window
 
     private IUniFiClient RequireClient() => _client ?? throw new UniFiApiException("请先连接 UCG。");
 
-    private void UpdateUndoState() => UndoButton.IsEnabled = SupportsWrites && _lastOperation is not null;
+    private void UpdateUndoState() => UndoButton.IsEnabled = SupportsDnsWrites && _lastOperation is not null;
+
+    private bool RequireDnsWriteMode()
+    {
+        if (SupportsDnsWrites) return true;
+        ShowError(new UniFiApiException("当前 Network 版本不支持本地账号 Cookie DNS 写入；请改用 API Key。"));
+        return false;
+    }
 
     private bool RequireWriteMode()
     {
@@ -1091,9 +1098,29 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowError(ex); }
         finally
         {
+            ApplyCapabilityState();
             IsEnabled = true;
             BusyOverlay.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private void ApplyCapabilityState()
+    {
+        if (!_uiReady || _client is null || CapabilityNoticeText is null) return;
+        var supportsWrites = _client.SupportsWrites;
+        var supportsDnsWrites = _client.SupportsDnsWrites;
+        CapabilityNoticeText.Text = _client.CapabilityNotice;
+        CapabilityNoticeText.Visibility = supportsWrites ? Visibility.Collapsed : Visibility.Visible;
+        OverviewApiBadgeText.Text = supportsWrites ? "实时读取 · Integration API" : supportsDnsWrites ? "本地账号 Cookie · DNS 可写" : "本地账号 Cookie · 只读";
+        ChangeCenterNavRadio.IsEnabled = supportsWrites;
+        OpenChangeCenterButton.IsEnabled = supportsWrites;
+        DnsBatchExpander.IsEnabled = supportsDnsWrites;
+        AddDnsButton.IsEnabled = supportsDnsWrites;
+        AddAclButton.IsEnabled = supportsWrites;
+        AddFirewallButton.IsEnabled = supportsWrites;
+        SelectAllCheckBox.IsEnabled = supportsDnsWrites;
+        UpdateBatchSelectionState();
+        UpdateUndoState();
     }
 
     private void ShowError(Exception exception)
@@ -1101,6 +1128,7 @@ public partial class MainWindow : Window
         var message = exception switch
         {
             UniFiApiException api when api.Message.Contains("仅 API Key", StringComparison.Ordinal) => api.Message,
+            UniFiApiException api when api.Message.Contains("Cookie DNS 写入", StringComparison.Ordinal) => api.Message,
             UniFiApiException api when api.StatusCode is 401 or 403 => "认证凭据无效或没有当前 Console 的访问权限。API Key 请在 unifi.ui.com 检查；账号登录请使用 Console 本地管理员账号。",
             UniFiApiException api when api.StatusCode == 404 && _client?.AuthenticationMode == AuthenticationMode.LocalAccount => "当前 Network 版本未提供该 Cookie 读取接口；此功能可改用 API Key。",
             UniFiApiException api when api.StatusCode == 404 => "此 Console 未提供请求的官方 Integration API，或所选站点/记录不存在。",

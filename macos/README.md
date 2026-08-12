@@ -1,8 +1,8 @@
 # UniFi Policy Manager Dual Authentication for macOS
 
-Native macOS dual-authentication port. API Key mode provides full management through the official Ubiquiti Integration API; UniFi OS local-account Cookie mode provides read-only access through local Network session endpoints.
+Native macOS dual-authentication port. API Key mode provides full management through the official Ubiquiti Integration API; on compatible Network versions, UniFi OS local-account Cookie mode supports DNS reads and writes while ACL and firewall remain read-only.
 
-> **Important:** Dual authentication does not mean both modes can write. Local-account Cookie mode only performs section-by-section reads. It cannot batch-write DNS or create, update, enable, disable, delete, or reorder ACL/firewall policies. Those operations and policy-change execution require API Key mode.
+> **Important:** Local-account DNS writes depend on the installed Network version. The app uses the v2 `static-dns` endpoint for DNS CRUD and batch operations. A 403, 404 or 405 response automatically disables further Cookie DNS writes and keeps reads available. ACL, firewall, ordering and policy-change execution still require API Key mode.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ Native macOS dual-authentication port. API Key mode provides full management thr
 - API Key mode: bundled 212-domain forwarder preset, built-in CSV template and forward-domain batch deletion
 - API Key mode: ACL and firewall policy list, JSON create/edit, enable/disable, delete and user-policy ordering
 - API Key mode: full policy change center with cross-platform baseline import, safe diff execution, strict synchronization, snapshot recovery and ordering restoration
-- Local-account Cookie mode: read-only DNS, ACL and firewall views when the installed Network version exposes those session endpoints
+- Local-account Cookie mode: DNS CRUD and batch operations on compatible Network versions; ACL and firewall views remain read-only
 - System and derived policies remain read-only
 - API Key or local-account password storage in macOS Keychain
 - Automatic live DNS, ACL and firewall baseline snapshots before write operations
@@ -36,9 +36,9 @@ Backups and operation logs are stored in:
 The connection screen supports two modes:
 
 - API Key: sends the key to the official Integration API and enables all write controls.
-- Local account: signs in through `/api/auth/login`, keeps the UniFi OS Cookie session and reads from local Network session endpoints. Write, delete, toggle and ordering controls are marked as API-Key-only and disabled.
+- Local account: signs in through `/api/auth/login`, keeps the UniFi OS Cookie session, reads section-by-section and enables DNS writes when the v2 `static-dns` endpoint accepts them.
 
-In particular, DNS batch writes and every ACL/firewall write operation are unavailable in local-account mode. Importing, previewing, searching and exporting successfully read data remain available, but applying changes requires an API Key.
+DNS create, update, enable/disable, delete, batch add and forward-domain batch delete are available when the controller accepts Cookie writes. The app saves a fresh DNS snapshot first. Every ACL/firewall write, ordering change and policy-change execution remains API-Key-only.
 
 Local-account mode requires a UniFi OS local administrator. Ubiquiti cloud SSO,
 2FA and Passkey accounts are not supported. Local session endpoint availability
